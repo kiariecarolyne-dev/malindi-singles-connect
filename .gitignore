@@ -1,0 +1,29 @@
+node_modules/
+.expo/
+dist/
+dist-check/
+dist-check-ios/
+web-build/
+npm-debug.*
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+*.orig.*
+.DS_Store
+
+# Environment & secrets — never commit
+.env
+.env.*
+!.env.example
+*.serviceaccount.json
+service-account*.json
+google-services.json
+GoogleService-Info.plist
+firebase-admin*.json
+secrets/
+
+# Local build/export logs
+export-log.txt
+export-ios.txt

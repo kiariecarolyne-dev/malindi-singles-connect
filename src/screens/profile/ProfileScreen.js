@@ -10,13 +10,11 @@ import Chip from '../../components/Chip';
 import { VerifiedBadge } from '../../components/Badge';
 import Screen from '../../components/Screen';
 import SectionHeader from '../../components/SectionHeader';
-import { DEMO_MODE } from '../../config/env';
 import { getAreaLabel } from '../../constants/areas';
 import { getIntention } from '../../constants/datingIntentions';
 import { getInterestsByIds } from '../../constants/interests';
 import { useAuth } from '../../context/AuthContext';
 import { matchService, premiumService, profileService } from '../../services';
-import { resetDb } from '../../services/demo/db';
 import { calculateAge } from '../../utils/age';
 import { isActiveRecently } from '../../utils/time';
 import { colors, radius, spacing } from '../../theme';
@@ -88,20 +86,6 @@ const ProfileScreen = ({ navigation }) => {
     Alert.alert('Log out', 'Are you sure you want to log out?', [
       { text: 'Cancel', style: 'cancel' },
       { text: 'Log out', style: 'destructive', onPress: signOut },
-    ]);
-  };
-
-  const confirmResetDemo = () => {
-    Alert.alert('Reset demo data?', 'This wipes local demo accounts, likes, matches and chats.', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Reset',
-        style: 'destructive',
-        onPress: async () => {
-          await resetDb();
-          await signOut();
-        },
-      },
     ]);
   };
 
@@ -218,15 +202,10 @@ const ProfileScreen = ({ navigation }) => {
           {isAdmin ? <MenuRow emoji="🧑‍⚖️" label="Admin moderation" sub="Review reports and verify profiles" onPress={() => navigation.navigate('Admin')} /> : null}
         </View>
 
-        {DEMO_MODE ? (
-          <>
-            <SectionHeader title="Demo mode" emoji="🧪" />
-            <View style={styles.menu}>
-              <MenuRow emoji="📧" label={`Signed in as ${user?.email}`} sub="Demo data lives only on this device" />
-              <MenuRow emoji="🔄" label="Reset demo data" sub="Wipe likes, matches and chats" onPress={confirmResetDemo} danger right={<Ionicons name="refresh" size={18} color={colors.danger} />} />
-            </View>
-          </>
-        ) : null}
+        <SectionHeader title="Account" emoji="📧" />
+        <View style={styles.menu}>
+          <MenuRow emoji="📧" label={`Signed in as ${user?.email}`} sub="Your account lives in Firebase Auth" />
+        </View>
 
         <View style={styles.menu}>
           <MenuRow emoji="🚪" label="Log out" onPress={confirmLogout} danger right={<Ionicons name="log-out-outline" size={18} color={colors.danger} />} />

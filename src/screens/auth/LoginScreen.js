@@ -7,9 +7,9 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Button from '../../components/Button';
 import Field from '../../components/Field';
 import Logo from '../../components/Logo';
-import { DEMO_MODE } from '../../config/env';
 import { useAuth } from '../../context/AuthContext';
-import { colors, gradients, radius, spacing } from '../../theme';
+import { validateEmail } from '../../utils/validation';
+import { colors, radius, spacing } from '../../theme';
 
 const LoginScreen = ({ navigation }) => {
   const insets = useSafeAreaInsets();
@@ -23,7 +23,8 @@ const LoginScreen = ({ navigation }) => {
 
   const validate = () => {
     const next = {};
-    if (!contact.trim()) next.contact = 'Enter your email or phone.';
+    const emailError = validateEmail(contact);
+    if (emailError) next.contact = emailError;
     if (!password) next.password = 'Enter your password.';
     setErrors(next);
     return Object.keys(next).length === 0;
@@ -40,13 +41,6 @@ const LoginScreen = ({ navigation }) => {
     } finally {
       setSubmitting(false);
     }
-  };
-
-  const fillDemo = () => {
-    setContact('demo@malindisingles.app');
-    setPassword('demo1234');
-    setErrors({});
-    setFormError(null);
   };
 
   return (
@@ -71,10 +65,10 @@ const LoginScreen = ({ navigation }) => {
           </View>
 
           <Field
-            label="Email or phone"
+            label="Email"
             value={contact}
             onChangeText={setContact}
-            placeholder="you@example.com or 0712345678"
+            placeholder="you@example.com"
             icon="at-outline"
             autoCapitalize="none"
             keyboardType="email-address"
@@ -102,21 +96,6 @@ const LoginScreen = ({ navigation }) => {
           ) : null}
 
           <Button title="Log In" icon="log-in-outline" onPress={handleLogin} loading={submitting} style={styles.submit} />
-
-          {DEMO_MODE ? (
-            <TouchableOpacity style={styles.demoCard} onPress={fillDemo} activeOpacity={0.8}>
-              <LinearGradient colors={gradients.header} style={styles.demoGradient}>
-                <View style={styles.demoHeader}>
-                  <Ionicons name="flask-outline" size={16} color={colors.info} />
-                  <Text style={styles.demoTitle}>Demo mode is ON</Text>
-                </View>
-                <Text style={styles.demoText}>
-                  Tap to fill demo credentials:{'\n'}demo@malindisingles.app  ·  demo1234{'\n'}
-                  Admin: admin@malindisingles.app  ·  admin1234
-                </Text>
-              </LinearGradient>
-            </TouchableOpacity>
-          ) : null}
 
           <TouchableOpacity style={styles.registerLink} onPress={() => navigation.navigate('AgeVerification')}>
             <Text style={styles.registerLinkText}>
@@ -148,11 +127,6 @@ const styles = StyleSheet.create({
   },
   formErrorText: { color: colors.danger, fontSize: 13, marginLeft: spacing.sm, flex: 1 },
   submit: { marginTop: spacing.sm },
-  demoCard: { marginTop: spacing.xl, borderRadius: radius.lg, overflow: 'hidden' },
-  demoGradient: { padding: spacing.lg, borderWidth: 1, borderColor: colors.border, borderRadius: radius.lg },
-  demoHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: spacing.sm },
-  demoTitle: { color: colors.info, fontSize: 13, fontWeight: '800', marginLeft: spacing.sm },
-  demoText: { color: colors.textMuted, fontSize: 12, lineHeight: 18 },
   registerLink: { marginTop: spacing.xl, alignItems: 'center' },
   registerLinkText: { color: colors.textSecondary, fontSize: 14 },
   registerLinkAccent: { color: colors.primary, fontWeight: '800' },

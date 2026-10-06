@@ -1,15 +1,9 @@
 /**
  * App-wide configuration.
  *
- * DEMO_MODE = true  -> the app runs fully offline with seeded Malindi data
- *                       stored on the device (AsyncStorage). Every service
- *                       call goes through src/services/index.js.
- *
- * DEMO_MODE = false -> the same service calls are executed against Firebase.
- *                       Requires src/services/firebase/firebaseConfig.js keys.
+ * Firebase is the only backend. Its connection settings come from the
+ * EXPO_PUBLIC_FIREBASE_* values in `.env` (see `.env.example`).
  */
-export const DEMO_MODE = true;
-
 export const APP = {
   name: 'Malindi Singles Connect',
   shortName: 'MSC',

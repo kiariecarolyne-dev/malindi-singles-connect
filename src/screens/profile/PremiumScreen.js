@@ -6,7 +6,6 @@ import { LinearGradient } from 'expo-linear-gradient';
 import Button from '../../components/Button';
 import Screen from '../../components/Screen';
 import ScreenHeader from '../../components/ScreenHeader';
-import { DEMO_MODE } from '../../config/env';
 import { GOLD, PLANS, FREE_VISIBLE_LIKES } from '../../constants/plans';
 import { useAuth } from '../../context/AuthContext';
 import { premiumService } from '../../services';
@@ -16,8 +15,9 @@ import { colors, gradients, radius, spacing } from '../../theme';
  * 💎 Malindi Gold paywall.
  *
  * Gold is a ONE-TIME KSh 100 purchase: no monthly fee, no renewal, no
- * expiry. Payments are not connected yet, so the buy button opens a clearly
- * labelled Demo Mode checkout instead of pretending a payment succeeded.
+ * expiry. M-Pesa/Daraja is not connected yet, so the buy button shows an
+ * honest "payments not connected" note instead of pretending a payment
+ * succeeded. No Gold can be granted from this screen.
  */
 const PremiumScreen = ({ navigation }) => {
   const { user, profile, refreshProfile } = useAuth();
@@ -48,19 +48,6 @@ const PremiumScreen = ({ navigation }) => {
       } else {
         setCheckout(result);
       }
-    });
-
-  const confirmDemo = () =>
-    run(async () => {
-      await premiumService.activateDemoGold(user.uid);
-      await refreshProfile();
-      setCheckout(null);
-    });
-
-  const removeDemoGold = () =>
-    run(async () => {
-      await premiumService.deactivateDemoGold(user.uid);
-      await refreshProfile();
     });
 
   const { free, premium } = PLANS;
@@ -148,29 +135,20 @@ const PremiumScreen = ({ navigation }) => {
             </View>
           </View>
         ) : checkout ? (
-          <View style={styles.demoBox}>
-            <View style={styles.demoHead}>
-              <Ionicons name="flask" size={16} color={colors.black} />
-              <Text style={styles.demoHeadText}>DEMO MODE — PAYMENTS ARE NOT CONNECTED YET</Text>
+          <View style={styles.paywallNote}>
+            <View style={styles.paywallHead}>
+              <Ionicons name="wallet-outline" size={16} color={colors.black} />
+              <Text style={styles.paywallHeadText}>M-PESA IS NOT CONNECTED YET</Text>
             </View>
-            <Text style={styles.demoLine}>
-              {GOLD.name}: {GOLD.priceLabel} ({GOLD.billingLabel.toLowerCase()})
+            <Text style={styles.paywallLine}>
+              {GOLD.name}: {checkout.amountLabel || GOLD.priceLabel} ({GOLD.billingLabel.toLowerCase()})
             </Text>
-            <Text style={styles.demoLine}>Reference: {checkout.reference}</Text>
-            <Text style={styles.demoNote}>
-              No M-Pesa or card is charged here. In production this step starts the KSh 100 STK
-              push and the entitlement is granted by the payment provider.
+            <Text style={styles.paywallNoteText}>
+              {checkout.message} Gold stays locked for everyone until payments go live, and nothing
+              is charged by tapping here.
             </Text>
             <Button
-              title="Activate Gold (demo)"
-              variant="gold"
-              icon="diamond"
-              onPress={confirmDemo}
-              loading={busy}
-              style={styles.cta}
-            />
-            <Button
-              title="Cancel"
+              title="Close"
               variant="ghost"
               onPress={() => setCheckout(null)}
               disabled={busy}
@@ -188,23 +166,13 @@ const PremiumScreen = ({ navigation }) => {
               style={styles.cta}
             />
             <Text style={styles.honest}>
-              {GOLD.closing} Payments are not connected yet — the button opens a clearly labelled
-              demo checkout so nothing is charged by mistake.
+              {GOLD.closing} Payments are not connected yet — the button shows what M-Pesa will
+              charge, and no Gold is granted until then.
             </Text>
           </>
         )}
 
-        {DEMO_MODE ? (
-          <Button
-            title={gold ? 'Remove demo Gold' : 'Back'}
-            variant="ghost"
-            onPress={gold ? removeDemoGold : () => navigation.goBack()}
-            disabled={busy}
-            style={styles.back}
-          />
-        ) : (
-          <Button title="Back" variant="ghost" onPress={() => navigation.goBack()} style={styles.back} />
-        )}
+        <Button title="Back" variant="ghost" onPress={() => navigation.goBack()} style={styles.back} />
       </ScrollView>
     </Screen>
   );
@@ -284,7 +252,7 @@ const styles = StyleSheet.create({
   featureText: { color: colors.textSecondary, fontSize: 12, lineHeight: 17, flex: 1 },
   missing: { color: colors.textMuted, textDecorationLine: 'line-through' },
 
-  demoBox: {
+  paywallNote: {
     backgroundColor: colors.surface,
     borderRadius: radius.lg,
     padding: spacing.lg,
@@ -292,7 +260,7 @@ const styles = StyleSheet.create({
     borderColor: colors.warning,
     marginTop: spacing.xl,
   },
-  demoHead: {
+  paywallHead: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
@@ -301,9 +269,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.sm,
     paddingVertical: 6,
   },
-  demoHeadText: { color: colors.black, fontSize: 10, fontWeight: '900', letterSpacing: 0.5, flex: 1 },
-  demoLine: { color: colors.text, fontSize: 14, fontWeight: '700', marginTop: spacing.md },
-  demoNote: { color: colors.textMuted, fontSize: 12, lineHeight: 18, marginTop: spacing.sm },
+  paywallHeadText: { color: colors.black, fontSize: 10, fontWeight: '900', letterSpacing: 0.5, flex: 1 },
+  paywallLine: { color: colors.text, fontSize: 14, fontWeight: '700', marginTop: spacing.md },
+  paywallNoteText: { color: colors.textMuted, fontSize: 12, lineHeight: 18, marginTop: spacing.sm },
 
   owned: {
     flexDirection: 'row',

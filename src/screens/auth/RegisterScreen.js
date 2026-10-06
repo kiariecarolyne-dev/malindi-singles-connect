@@ -15,7 +15,7 @@ import { DATING_INTENTIONS } from '../../constants/datingIntentions';
 import { useAuth } from '../../context/AuthContext';
 import { calculateAge, isAdult } from '../../utils/age';
 import { colors, radius, spacing } from '../../theme';
-import { validateDob, validateEmailOrPhone, validateName, validatePassword } from '../../utils/validation';
+import { validateDob, validateEmail, validateName, validatePassword } from '../../utils/validation';
 
 const GENDERS = [
   { id: 'female', label: 'Woman' },
@@ -63,7 +63,7 @@ const RegisterScreen = ({ navigation, route }) => {
     if (!intention) next.intention = 'What are you looking for?';
     if (!area) next.area = 'Choose your area around Malindi.';
 
-    const contactError = validateEmailOrPhone(contact);
+    const contactError = validateEmail(contact);
     if (contactError) next.contact = contactError;
 
     const passError = validatePassword(password);
@@ -185,10 +185,10 @@ const RegisterScreen = ({ navigation, route }) => {
           />
 
           <Field
-            label="Email or phone"
+            label="Email"
             value={contact}
             onChangeText={setContact}
-            placeholder="you@example.com or 0712345678"
+            placeholder="you@example.com"
             icon="at-outline"
             autoCapitalize="none"
             keyboardType="email-address"

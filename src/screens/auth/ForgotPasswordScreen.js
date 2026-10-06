@@ -7,7 +7,6 @@ import Button from '../../components/Button';
 import Field from '../../components/Field';
 import Screen from '../../components/Screen';
 import ScreenHeader from '../../components/ScreenHeader';
-import { DEMO_MODE } from '../../config/env';
 import { authService } from '../../services';
 import { colors, radius, spacing } from '../../theme';
 
@@ -55,15 +54,6 @@ const ForgotPasswordScreen = ({ navigation }) => {
               If an account exists for <Text style={styles.strong}>{contact}</Text>, a reset link will
               be sent to it.
             </Text>
-            {DEMO_MODE ? (
-              <View style={styles.note}>
-                <Ionicons name="information-circle" size={16} color={colors.info} />
-                <Text style={styles.noteText}>
-                  Demo mode: no real email is sent. In production this runs through Firebase
-                  Authentication.
-                </Text>
-              </View>
-            ) : null}
             <Button title="Back to log in" onPress={() => navigation.navigate('Login')} style={styles.btn} />
           </>
         ) : (
@@ -115,15 +105,6 @@ const styles = StyleSheet.create({
   title: { color: colors.text, fontSize: 22, fontWeight: '900', textAlign: 'center' },
   body: { color: colors.textSecondary, fontSize: 14, lineHeight: 22, textAlign: 'center', marginTop: spacing.md },
   strong: { color: colors.text, fontWeight: '700' },
-  note: {
-    flexDirection: 'row',
-    backgroundColor: 'rgba(77,163,255,0.1)',
-    borderRadius: radius.md,
-    padding: spacing.md,
-    marginTop: spacing.lg,
-    alignItems: 'flex-start',
-  },
-  noteText: { color: colors.textSecondary, fontSize: 12, marginLeft: spacing.sm, flex: 1, lineHeight: 18 },
   errorBox: {
     flexDirection: 'row',
     alignItems: 'center',

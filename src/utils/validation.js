@@ -7,6 +7,13 @@ export const validateName = (name) => {
   return null;
 };
 
+export const validateEmail = (value) => {
+  if (!value || !value.trim()) return 'Please enter your email address.';
+  const v = value.trim();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)) return 'Enter a valid email address.';
+  return null;
+};
+
 export const validateEmailOrPhone = (value) => {
   if (!value || !value.trim()) return 'Please enter your email or phone number.';
   const v = value.trim();

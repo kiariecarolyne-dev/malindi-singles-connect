@@ -1,4 +1,6 @@
 import { getFirebaseAuth } from '../firebase/firebaseConfig';
+import { File } from 'expo-file-system';
+import { fetch } from 'expo/fetch';
 
 const DEFAULT_BACKEND_URL = 'https://malindi-singles-connect-backend.onrender.com/api';
 
@@ -19,35 +21,9 @@ export const uploadProfilePhotoViaBackend = async (localUri, asset) => {
     throw new Error('No photo selected.');
   }
 
-  const uriLower = (uri || '').toLowerCase();
-  const fileNameFromAsset = asset?.fileName || null;
-  const fileNameLower = fileNameFromAsset ? fileNameFromAsset.toLowerCase() : uriLower;
-
-  let ext = 'jpg';
-  if (fileNameLower.endsWith('.png') || uriLower.endsWith('.png')) {
-    ext = 'png';
-  } else if (fileNameLower.endsWith('.webp') || uriLower.endsWith('.webp')) {
-    ext = 'webp';
-  } else if (fileNameLower.endsWith('.heic') || uriLower.endsWith('.heic')) {
-    ext = 'heic';
-  } else if (fileNameLower.endsWith('.heif') || uriLower.endsWith('.heif')) {
-    ext = 'heif';
-  } else if (fileNameLower.endsWith('.jpeg') || uriLower.endsWith('.jpeg') || uriLower.endsWith('.jpg')) {
-    ext = 'jpg';
-  }
-
-  let filename = fileNameFromAsset;
-  if (!filename || !String(filename).includes('.')) {
-    filename = `photo_${Date.now()}_${Math.random().toString(36).slice(2, 8)}.${ext}`;
-  }
-  filename = String(filename);
-
   const form = new FormData();
-  form.append('photo', {
-    uri,
-    name: filename,
-    type: 'application/octet-stream',
-  });
+  const file = new File(uri);
+  form.append('photo', file);
 
   const res = await fetch(`${getBackendUrl()}/profile-photos/photos`, {
     method: 'POST',

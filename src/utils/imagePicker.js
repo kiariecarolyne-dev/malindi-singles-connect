@@ -19,7 +19,14 @@ export const pickImage = async () => {
 
   if (result.canceled || !result.assets?.length) return null;
   const asset = result.assets[0];
-  return { uri: asset.uri, width: asset.width, height: asset.height };
+  return {
+    uri: asset.uri,
+    width: asset.width,
+    height: asset.height,
+    mimeType: asset.mimeType,
+    fileName: asset.fileName,
+    type: asset.type,
+  };
 };
 
 /** Suggested fallback avatar (used when the user prefers not to upload). */

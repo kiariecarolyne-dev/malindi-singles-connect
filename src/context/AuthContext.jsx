@@ -9,10 +9,12 @@ import React, {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from 'react';
 
 import { authService, profileService } from '../services';
+import { runAuthMeTest } from '../utils/devAuthMeTest';
 
 const AuthContext = createContext(null);
 
@@ -21,6 +23,7 @@ export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
   const [profile, setProfile] = useState(null);
   const [profileVersion, setProfileVersion] = useState(0);
+  const authMeTestRan = useRef(false);
 
   const loadProfile = useCallback(async (uid) => {
     if (!uid) {
@@ -35,17 +38,36 @@ export const AuthProvider = ({ children }) => {
     }
   }, []);
 
+  const signUpInFlight = useRef(false);
+
+  const applyAuthUser = useCallback(
+    (nextUser) => {
+      // TEMP dev-only diagnostic — safe to remove.
+      if (nextUser && !authMeTestRan.current) {
+        authMeTestRan.current = true;
+        runAuthMeTest();
+      }
+      setUser(nextUser);
+      return loadProfile(nextUser?.uid || null);
+    },
+    [loadProfile],
+  );
+
   useEffect(() => {
     const unsubscribe = authService.onAuthStateChanged((nextUser) => {
-      setUser(nextUser);
-      loadProfile(nextUser?.uid || null);
+      // While signUp() runs it owns the session: Firebase emits the new user
+      // before the account documents exist, and deleteUser() emits null when
+      // they fail. Applying either would flip the root gate mid-signup
+      // (onboarding -> auth stack) while the user is on PhotoSetup.
+      if (signUpInFlight.current) return;
+      applyAuthUser(nextUser);
     });
     authService
       .restoreSession()
       .catch(() => {})
       .finally(() => setInitializing(false));
     return unsubscribe;
-  }, [loadProfile]);
+  }, [applyAuthUser]);
 
   const refreshProfile = useCallback(async () => {
     if (user?.uid) {
@@ -73,11 +95,22 @@ export const AuthProvider = ({ children }) => {
 
   const signUp = useCallback(
     async (data) => {
-      const u = await authService.signUp(data);
-      await loadProfile(u.uid);
-      return u;
+      signUpInFlight.current = true;
+      try {
+        const u = await authService.signUp(data);
+        await applyAuthUser(u);
+        return u;
+      } catch (e) {
+        // Signup failed (account documents could not be created): the session
+        // is gone, so settle on null here instead of letting a mid-signup
+        // emission bounce the root gate while RegisterScreen is mounted.
+        applyAuthUser(null);
+        throw e;
+      } finally {
+        signUpInFlight.current = false;
+      }
     },
-    [loadProfile],
+    [applyAuthUser],
   );
 
   const signOut = useCallback(async () => {

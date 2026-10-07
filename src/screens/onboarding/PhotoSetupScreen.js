@@ -48,6 +48,7 @@ const PhotoSetupScreen = ({ navigation }) => {
   };
 
   const handleContinue = async () => {
+    if (saving) return;
     if (!photos.length) {
       setError('Please add at least one photo so people can recognise you.');
       return;
@@ -55,8 +56,14 @@ const PhotoSetupScreen = ({ navigation }) => {
     setSaving(true);
     try {
       await saveProfile({ photos });
+      if (__DEV__) {
+        console.warn('[PhotoSetup] photos saved — navigating to BioInterests');
+      }
       navigation.navigate('BioInterests');
     } catch (e) {
+      if (__DEV__) {
+        console.warn('[PhotoSetup] Continue failed:', e?.code || e?.name || 'unknown', e?.message || '');
+      }
       setError(e.message || 'Could not save your photos. Please try again.');
     } finally {
       setSaving(false);

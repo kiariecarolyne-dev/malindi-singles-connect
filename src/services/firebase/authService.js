@@ -25,6 +25,7 @@ let listeners = [];
 let currentUser = null;
 let boundToAuth = false;
 let unsubscribeUserDoc = null;
+let authEpoch = 0;
 
 const emit = () => listeners.forEach((cb) => cb(currentUser));
 
@@ -82,6 +83,7 @@ const bindToAuth = () => {
   boundToAuth = true;
   const auth = getFirebaseAuth();
   firebaseOnAuthStateChanged(auth, async (authUser) => {
+    const epoch = ++authEpoch;
     if (!authUser) {
       currentUser = null;
       watchUserDoc(null);
@@ -89,6 +91,9 @@ const bindToAuth = () => {
       return;
     }
     const userDoc = await readUserDoc(authUser);
+    // A newer auth state superseded this read (e.g. deleteUser during a
+    // failed signup) — never publish the stale user.
+    if (epoch !== authEpoch) return;
     currentUser = buildUser(authUser, userDoc);
     watchUserDoc(authUser.uid);
     emit();
@@ -146,6 +151,7 @@ export const restoreSession = async () => {
 
 /** Writes `users/{uid}` + a bare profile so onboarding can finish it. */
 const createAccountDocuments = async (authUser, { fullName, seedProfile = {} }) => {
+  let writeStep = 'users';
   try {
     await setDoc(docRef('users', authUser.uid), {
       uid: authUser.uid,
@@ -154,6 +160,7 @@ const createAccountDocuments = async (authUser, { fullName, seedProfile = {} }) 
       role: 'user',
       createdAt: serverTimestamp(),
     });
+    writeStep = 'profiles';
     await setDoc(docRef('profiles', authUser.uid), {
       uid: authUser.uid,
       fullName: fullName || authUser.email || 'Member',
@@ -166,7 +173,14 @@ const createAccountDocuments = async (authUser, { fullName, seedProfile = {} }) 
       lastActiveAt: serverTimestamp(),
       ...compact(seedProfile),
     });
-  } catch {
+  } catch (error) {
+    if (__DEV__) {
+      console.warn(
+        `[auth] createAccountDocuments failed at "${writeStep}" for uid ${authUser.uid}:`,
+        error?.code || error?.name || 'unknown',
+        error?.message || '',
+      );
+    }
     // Best effort cleanup so the same email can be retried.
     try {
       await deleteDoc(docRef('profiles', authUser.uid));

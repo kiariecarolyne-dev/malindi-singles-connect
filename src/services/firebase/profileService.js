@@ -18,11 +18,12 @@ import {
   updateDoc,
   where,
 } from 'firebase/firestore';
-import { deleteObject, getDownloadURL, ref as storageRef, uploadBytes } from 'firebase/storage';
 
 import { LIMITS } from '../../config/env';
 import { isKnownArea, isSameAreaGroup } from '../../constants/areas';
-import { getFirebaseAuth, getFirebaseStorage } from './firebaseConfig';
+import { getFirebaseAuth } from './firebaseConfig';
+import { deleteProfilePhoto, photoPathFromValue } from '../supabase/storage';
+import { uploadProfilePhotoViaBackend } from '../backend/photoService';
 import {
   blockDocId,
   col,
@@ -42,60 +43,55 @@ import {
 import * as premiumService from './premiumService';
 
 /* ------------------------------------------------------------------ *
- * Photos — local picker URIs are uploaded before the profile is saved *
+ * Photos — local picker URIs are uploaded via backend (Render) before *
+ * the profile is saved. Firestore only ever receives the photo URL.   *
  * ------------------------------------------------------------------ */
 
-const isLocalUri = (uri) => typeof uri === 'string' && /^(file|content|data|asset):/.test(uri);
-
-const uploadLocalPhoto = async (uid, uri) => {
-  const response = await fetch(uri);
-  const blob = await response.blob();
-  const filename = `photo_${Date.now()}_${Math.random().toString(36).slice(2, 8)}.jpg`;
-  const imageRef = storageRef(getFirebaseStorage(), `profiles/${uid}/${filename}`);
-  try {
-    await uploadBytes(imageRef, blob, {
-      contentType: 'image/jpeg',
-      cacheControl: 'public, max-age=31536000',
-    });
-  } finally {
-    if (typeof blob.close === 'function') blob.close();
+const isLocalUri = (uri) => {
+  if (typeof uri === 'string') {
+    return /^(file|content|data|asset):/.test(uri);
   }
-  return getDownloadURL(imageRef);
+  if (typeof uri === 'object' && uri !== null && typeof uri.uri === 'string') {
+    return /^(file|content|data|asset):/.test(uri.uri);
+  }
+  return false;
 };
 
-/** Download URL -> `profiles/{uid}/{file}` object path (empty if not ours). */
-const objectPathFromUrl = (url, uid) => {
-  if (typeof url !== 'string' || !url.includes('/o/')) return null;
-  try {
-    const encoded = url.split('/o/')[1].split('?')[0];
-    const path = decodeURIComponent(encoded);
-    return path.startsWith(`profiles/${uid}/`) ? path : null;
-  } catch {
-    return null;
-  }
-};
-
-/** Replace device-local URIs with hosted URLs; clean up photos that were removed. */
+/** Replace device-local URIs with backend-uploaded URLs; clean up removed photos. */
 const persistPhotos = async (uid, patch, previousPhotos = []) => {
   if (!Array.isArray(patch.photos)) return patch;
 
   const photos = [];
   for (const photo of patch.photos) {
-    photos.push(isLocalUri(photo) ? await uploadLocalPhoto(uid, photo) : photo);
+    if (!isLocalUri(photo)) {
+      photos.push(photo);
+      continue;
+    }
+    try {
+      const asset = typeof photo === 'object' && photo !== null ? photo : null;
+      const uri = asset?.uri || photo;
+      const { url } = await uploadProfilePhotoViaBackend(uri, asset);
+      photos.push(url);
+    } catch (error) {
+      if (__DEV__) {
+        console.warn(
+          '[photos] upload failed:',
+          error?.status || error?.name || 'unknown',
+          error?.message || '',
+        );
+      }
+      throw error;
+    }
   }
 
-  const keptPaths = new Set(photos.map((photo) => objectPathFromUrl(photo, uid)).filter(Boolean));
+  const keptPaths = new Set(
+    photos.map((photo) => photoPathFromValue(photo, uid)).filter(Boolean),
+  );
   await Promise.all(
     previousPhotos
-      .map((photo) => objectPathFromUrl(photo, uid))
+      .map((photo) => photoPathFromValue(photo, uid))
       .filter((path) => path && !keptPaths.has(path))
-      .map(async (path) => {
-        try {
-          await deleteObject(storageRef(getFirebaseStorage(), path));
-        } catch {
-          // Best effort: a leftover photo must not block saving the profile.
-        }
-      }),
+      .map((path) => deleteProfilePhoto(path)),
   );
 
   return { ...patch, photos };

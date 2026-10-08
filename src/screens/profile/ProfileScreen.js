@@ -179,6 +179,12 @@ const ProfileScreen = ({ navigation }) => {
               ) : undefined
             }
           />
+          <MenuRow
+            emoji="💛"
+            label="Gold Circle"
+            sub={gold ? 'The exclusive community for Gold members' : 'Gold-only community — join to enter'}
+            onPress={() => navigation.navigate('GoldCircle')}
+          />
         </View>
 
         <SectionHeader title="Settings" emoji="⚙️" />

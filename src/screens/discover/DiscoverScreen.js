@@ -11,10 +11,11 @@ import SwipeDeck from '../../components/SwipeDeck';
 import { LIMITS } from '../../config/env';
 import { getAreaLabel } from '../../constants/areas';
 import { useAuth } from '../../context/AuthContext';
-import { likeService, profileService } from '../../services';
+import { likeService, premiumService, profileService } from '../../services';
 import { compatibilityScore } from '../../utils/compatibility';
 import { haversineKm } from '../../utils/distance';
-import { colors, radius, spacing } from '../../theme';
+import { colors, radius, spacing, gradients } from '../../theme';
+import { LinearGradient } from 'expo-linear-gradient';
 
 /**
  * The heart of the app: swipe/pass/like deck of nearby compatible singles.
@@ -29,6 +30,8 @@ const DiscoverScreen = ({ navigation }) => {
   const [toast, setToast] = useState(null);
   const [deckKey, setDeckKey] = useState(0);
   const deckRef = useRef([]);
+
+  const isGold = premiumService.isGold(profile);
 
   const loadPage = useCallback(
     async (nextPage, append = false) => {
@@ -178,6 +181,40 @@ const DiscoverScreen = ({ navigation }) => {
         </TouchableOpacity>
       </View>
 
+      {isGold ? (
+        <View style={styles.goldBannerActive}>
+          <Ionicons name="checkmark-circle" size={18} color={colors.gold} />
+          <Text style={styles.goldBannerActiveText}>✓ Malindi Gold Active</Text>
+        </View>
+      ) : (
+        <TouchableOpacity
+          style={styles.goldBanner}
+          activeOpacity={0.9}
+          onPress={() => navigation.navigate('Premium')}
+          accessibilityRole="button"
+          accessibilityLabel="Unlock Malindi Gold"
+        >
+          <LinearGradient
+            colors={gradients.gold}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={styles.goldBannerGradient}
+          >
+            <View style={styles.goldBannerLeft}>
+              <Text style={styles.goldBannerTitle}>✨ MALINDI GOLD</Text>
+              <Text style={styles.goldBannerSub}>See who likes you. Unlock more connections.</Text>
+              <Text style={styles.goldBannerMeta}>KSh 100 • One-time payment</Text>
+            </View>
+            <View style={styles.goldBannerRight}>
+              <View style={styles.goldBannerCta}>
+                <Text style={styles.goldBannerCtaText}>Unlock Gold</Text>
+                <Ionicons name="chevron-forward" size={16} color={colors.black} />
+              </View>
+            </View>
+          </LinearGradient>
+        </TouchableOpacity>
+      )}
+
       <View style={styles.body}>
         {loading ? (
           <View style={styles.loadingWrap}>
@@ -248,6 +285,75 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   body: { flex: 1 },
+
+  goldBanner: {
+    marginHorizontal: spacing.lg,
+    marginBottom: spacing.sm,
+    borderRadius: radius.lg,
+    overflow: 'hidden',
+  },
+  goldBannerGradient: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
+    gap: spacing.md,
+  },
+  goldBannerLeft: { flex: 1 },
+  goldBannerTitle: {
+    color: colors.black,
+    fontSize: 13,
+    fontWeight: '900',
+    letterSpacing: 1,
+    marginBottom: 2,
+  },
+  goldBannerSub: {
+    color: 'rgba(0,0,0,0.8)',
+    fontSize: 12,
+    fontWeight: '800',
+    lineHeight: 17,
+  },
+  goldBannerMeta: {
+    color: 'rgba(0,0,0,0.7)',
+    fontSize: 11,
+    fontWeight: '700',
+    marginTop: 2,
+  },
+  goldBannerRight: { alignItems: 'flex-end' },
+  goldBannerCta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: 'rgba(255,255,255,0.55)',
+    paddingHorizontal: spacing.md,
+    paddingVertical: 6,
+    borderRadius: radius.round,
+  },
+  goldBannerCtaText: {
+    color: colors.black,
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  goldBannerActive: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    marginHorizontal: spacing.lg,
+    marginBottom: spacing.sm,
+    backgroundColor: colors.surface,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.gold,
+    paddingVertical: spacing.sm,
+  },
+  goldBannerActiveText: {
+    color: colors.gold,
+    fontSize: 12,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+  },
   cardHost: { flex: 1 },
   cardTouch: { ...StyleSheet.absoluteFillObject, backgroundColor: 'transparent' },
   stamp: {

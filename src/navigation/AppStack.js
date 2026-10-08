@@ -5,6 +5,7 @@ import MainTabs from './MainTabs';
 import BlockedUsersScreen from '../screens/profile/BlockedUsersScreen';
 import BoostScreen from '../screens/profile/BoostScreen';
 import EditProfileScreen from '../screens/profile/EditProfileScreen';
+import GoldCircleScreen from '../screens/goldCircle/GoldCircleScreen';
 import LikedYouScreen from '../screens/profile/LikedYouScreen';
 import NotificationsScreen from '../screens/profile/NotificationsScreen';
 import PremiumScreen from '../screens/profile/PremiumScreen';
@@ -35,6 +36,9 @@ const AppStack = () => (
     <Stack.Screen name="LikedYou" component={LikedYouScreen} />
     <Stack.Screen name="BlockedUsers" component={BlockedUsersScreen} />
     <Stack.Screen name="Premium" component={PremiumScreen} />
+    {/* 💛 Gold-only community: the screen itself renders the upgrade
+        paywall for free members, and the rules deny them the data. */}
+    <Stack.Screen name="GoldCircle" component={GoldCircleScreen} />
     <Stack.Screen name="Boost" component={BoostScreen} />
     <Stack.Screen name="MeetPlan" component={MeetPlanScreen} />
     <Stack.Screen name="Report" component={ReportScreen} />

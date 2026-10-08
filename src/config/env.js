@@ -22,6 +22,12 @@ export const LIMITS = {
   chatPageSize: 30,
   bioMaxLength: 200,
   boostMinutes: 30,
+
+  /* 💛 Gold Circle community */
+  goldCirclePageSize: 12,
+  goldCirclePostMaxLength: 2000,
+  goldCircleCommentMaxLength: 1000,
+  goldCircleImageMaxBytes: 5 * 1024 * 1024,
 };
 
 export const STORAGE_KEYS = {

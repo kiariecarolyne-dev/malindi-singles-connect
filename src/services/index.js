@@ -16,6 +16,7 @@ import * as firebaseReportService from './firebase/reportService';
 import * as firebaseNotificationService from './firebase/notificationService';
 import * as firebaseAdminService from './firebase/adminService';
 import * as firebasePremiumService from './firebase/premiumService';
+import * as firebaseGoldCircleService from './firebase/goldCircleService';
 
 export const authService = firebaseAuthService;
 export const profileService = firebaseProfileService;
@@ -27,5 +28,6 @@ export const reportService = firebaseReportService;
 export const notificationService = firebaseNotificationService;
 export const adminService = firebaseAdminService;
 export const premiumService = firebasePremiumService;
+export const goldCircleService = firebaseGoldCircleService;
 
 export const IS_DEMO = false;

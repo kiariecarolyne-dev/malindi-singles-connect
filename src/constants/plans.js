@@ -13,7 +13,7 @@
  */
 
 /** How many incoming likes a free member sees clearly before the blur starts. */
-export const FREE_VISIBLE_LIKES = 3;
+export const FREE_VISIBLE_LIKES = 5;
 
 export const GOLD = {
   id: 'gold',

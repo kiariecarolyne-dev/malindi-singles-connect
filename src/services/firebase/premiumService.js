@@ -3,7 +3,7 @@
  *
  * The visibility business logic is identical to the original demo version:
  *
- *   FREE member -> first 3 incoming likes are visible (oldest first)
+ *   FREE member -> first 5 incoming likes are visible (oldest first)
  *   GOLD member -> every incoming like is visible
  *
  * Locked likes are NEVER deleted — they stay in Firestore and unlock the
@@ -79,9 +79,9 @@ export const isGold = (profile) =>
 
 /**
  * The core visibility rule.
- * FREE -> first 3 likes visible, GOLD -> unlimited (hidden likes are kept).
- */
-export const getVisibleLikeLimit = (goldMember) =>
+   * FREE -> first 5 likes visible, GOLD -> unlimited (hidden likes are kept).
+   */
+  export const getVisibleLikeLimit = (goldMember) =>
   goldMember ? Number.POSITIVE_INFINITY : FREE_VISIBLE_LIKES;
 
 /* ------------------------------------------------------------------ *

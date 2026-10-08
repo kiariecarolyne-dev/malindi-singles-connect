@@ -12,7 +12,7 @@ import Screen from '../../components/Screen';
 import ScreenHeader from '../../components/ScreenHeader';
 import Skeleton from '../../components/Skeleton';
 import { useAuth } from '../../context/AuthContext';
-import { GOLD, FREE_VISIBLE_LIKES } from '../../constants/plans';
+import { FREE_VISIBLE_LIKES } from '../../constants/plans';
 import { getAreaLabel } from '../../constants/areas';
 import { likeService, premiumService, profileService } from '../../services';
 import { colors, gradients, radius, spacing } from '../../theme';
@@ -21,7 +21,7 @@ import { timeAgo } from '../../utils/time';
 /**
  * Likes You.
  *
- * Free members see the first three incoming likes clearly and every later
+ * Free members see the first five incoming likes clearly and every later
  * like as a blurred card (name, age, area, compatibility only).
  * 💎 Malindi Gold unblurs every card instantly — hidden likes are never
  * deleted, just locked, so unlocking shows them right away.
@@ -144,11 +144,12 @@ const LikedYouScreen = ({ navigation }) => {
         <Ionicons name="diamond" size={18} color={colors.black} />
       </View>
       <View style={{ flex: 1 }}>
-        <Text style={styles.goldTitle}>{GOLD.tagline}</Text>
-        <Text style={styles.goldSub}>{GOLD.noFees}</Text>
+        <Text style={styles.goldTitle}>{"You've seen your first 5 likes. More people are waiting to connect with you."}</Text>
+        <Text style={styles.goldSub}>Unlock Malindi Gold to see everyone who likes you.</Text>
+        <Text style={styles.goldMeta}>KSh 100 • One-time payment</Text>
       </View>
       <TouchableOpacity onPress={openPaywall} style={styles.goldBtn} activeOpacity={0.85}>
-        <Text style={styles.goldBtnText}>Unlock</Text>
+        <Text style={styles.goldBtnText}>Unlock Malindi Gold</Text>
       </TouchableOpacity>
     </LinearGradient>
   );
@@ -281,8 +282,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  goldTitle: { color: colors.black, fontSize: 14, fontWeight: '900' },
+  goldTitle: { color: colors.black, fontSize: 13, fontWeight: '900', lineHeight: 18 },
   goldSub: { color: 'rgba(0,0,0,0.7)', fontSize: 12, fontWeight: '700', marginTop: 2 },
+  goldMeta: { color: 'rgba(0,0,0,0.7)', fontSize: 11, fontWeight: '700', marginTop: 2 },
   goldBtn: {
     backgroundColor: colors.black,
     borderRadius: radius.round,

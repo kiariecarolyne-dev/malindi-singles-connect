@@ -17,6 +17,7 @@ import {
   assertSucceeds,
   initializeTestEnvironment,
 } from '@firebase/rules-unit-testing';
+import { serverTimestamp } from 'firebase/firestore';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -24,6 +25,7 @@ const ALICE = 'aliceuid0001';
 const BOB = 'bobuid000002';
 const CAROL = 'caroluid0003';
 const ADMIN = 'adminuid0001';
+const DAVE = 'daveuid00004'; // legacy Gold via profile.gold.isGold
 
 const likeId = `like_${ALICE}_${BOB}`;
 const matchId = `match_${ALICE}_${BOB}`;
@@ -80,6 +82,7 @@ const seed = () =>
     await db.doc(`users/${BOB}`).set({ uid: BOB, email: 'bob@x.co', fullName: 'Bob', role: 'user' });
     await db.doc(`users/${CAROL}`).set({ uid: CAROL, email: 'carol@x.co', fullName: 'Carol', role: 'user' });
     await db.doc(`users/${ADMIN}`).set({ uid: ADMIN, email: 'admin@x.co', fullName: 'Admin', role: 'admin' });
+    await db.doc(`users/${DAVE}`).set({ uid: DAVE, email: 'dave@x.co', fullName: 'Dave', role: 'user' });
 
     await db.doc(`profiles/${ALICE}`).set({
       uid: ALICE, fullName: 'Alice', photos: [], bio: 'Hi', gender: 'female',
@@ -89,6 +92,18 @@ const seed = () =>
     await db.doc(`profiles/${BOB}`).set({
       uid: BOB, fullName: 'Bob', photos: [], bio: 'Hey', gender: 'male',
       interestedIn: ['female'], area: 'malindi-town', verification: { status: 'pending' },
+      lastActiveAt: now, createdAt: now, updatedAt: now,
+    });
+    await db.doc(`profiles/${CAROL}`).set({
+      uid: CAROL, fullName: 'Carol', photos: [], bio: 'Hello', gender: 'female',
+      interestedIn: ['male'], area: 'malindi-town', verification: { status: 'unverified' },
+      lastActiveAt: now, createdAt: now, updatedAt: now,
+    });
+    // Legacy Gold: no entitlement doc, gold flag lives on the profile.
+    await db.doc(`profiles/${DAVE}`).set({
+      uid: DAVE, fullName: 'Dave', photos: [], bio: 'Legacy', gender: 'male',
+      interestedIn: ['female'], area: 'malindi-town', verification: { status: 'unverified' },
+      gold: { isGold: true, goldActivatedAt: now },
       lastActiveAt: now, createdAt: now, updatedAt: now,
     });
 
@@ -118,7 +133,25 @@ const seed = () =>
       fromUid: ALICE, targetUid: BOB, reason: 'Spam', details: '', status: 'open', createdAt: now,
     });
     await db.doc(`goldEntitlements/${ALICE}`).set({
-      uid: ALICE, isGold: false, price: 100, currency: 'KES', billing: 'one_time',
+      uid: ALICE, isGold: true, price: 100, currency: 'KES', billing: 'one_time',
+    });
+
+    /* 💛 Gold Circle fixtures — a Gold post (Alice) and a legacy-Gold post
+       (Dave), plus one existing comment so counter deltas have a base. */
+    await db.doc('goldCirclePosts/gpost1').set({
+      authorUid: ALICE, authorName: 'Alice', authorAvatar: '',
+      text: 'Hello Gold Circle!', category: 'discussion',
+      imageUrl: null, imagePath: null, sharedWhatsApp: false, whatsapp: null,
+      likedBy: [], likeCount: 0, commentCount: 1, createdAt: now, updatedAt: now,
+    });
+    await db.doc('goldCirclePosts/gpost2').set({
+      authorUid: DAVE, authorName: 'Dave', authorAvatar: '',
+      text: 'Second post', category: 'story',
+      imageUrl: null, imagePath: null, sharedWhatsApp: false, whatsapp: null,
+      likedBy: [], likeCount: 0, commentCount: 0, createdAt: now, updatedAt: now,
+    });
+    await db.doc('goldCirclePosts/gpost1/comments/gc1').set({
+      authorUid: DAVE, authorName: 'Dave', authorAvatar: '', text: 'Welcome!', createdAt: now,
     });
   });
 
@@ -396,6 +429,172 @@ await denies('new account with role admin', () =>
 await allows('new account with role user', () =>
   asUser(CAROL).doc('users/newuser00001').set({ uid: 'newuser00001', email: 'n2@x.co', fullName: 'New', role: 'user' }),
 );
+
+console.log('💛 gold circle (Gold-only community)');
+
+// One instance per actor so refs/batches stay on the same Firestore handle.
+const goldAlice = asUser(ALICE);
+const goldCarol = asUser(CAROL);
+const goldDave = asUser(DAVE);
+const goldAdmin = asUser(ADMIN);
+
+const validPost = (authorUid) => ({
+  authorUid,
+  authorName: 'Alice',
+  authorAvatar: '',
+  text: 'A fresh post from the tests',
+  category: 'discussion',
+  imageUrl: null,
+  imagePath: null,
+  sharedWhatsApp: false,
+  whatsapp: null,
+  likedBy: [],
+  likeCount: 0,
+  commentCount: 0,
+  createdAt: serverTimestamp(),
+  updatedAt: serverTimestamp(),
+});
+
+const validComment = (authorUid) => ({
+  authorUid,
+  authorName: 'Alice',
+  authorAvatar: '',
+  text: 'Nice one!',
+  createdAt: serverTimestamp(),
+});
+
+// --- reads: Gold-only -----------------------------------------------------
+await allows('gold member lists the feed', () =>
+  goldAlice.collection('goldCirclePosts').orderBy('createdAt', 'desc').limit(12).get(),
+);
+await allows('gold member reads a post', () => goldAlice.doc('goldCirclePosts/gpost1').get());
+await allows('legacy gold member reads the feed', () =>
+  goldDave.collection('goldCirclePosts').orderBy('createdAt', 'desc').limit(12).get(),
+);
+await allows('admin can read the feed', () => goldAdmin.collection('goldCirclePosts').limit(12).get());
+await denies('free member is denied the feed', () =>
+  goldCarol.collection('goldCirclePosts').orderBy('createdAt', 'desc').limit(12).get(),
+);
+await denies('free member denied a single post', () => goldCarol.doc('goldCirclePosts/gpost1').get());
+await denies('anonymous denied the feed', () => asAnon().collection('goldCirclePosts').limit(12).get());
+await allows('gold member lists comments', () =>
+  goldAlice.doc('goldCirclePosts/gpost1').collection('comments').orderBy('createdAt', 'asc').limit(100).get(),
+);
+await denies('free member denied the comment thread', () =>
+  goldCarol.doc('goldCirclePosts/gpost1').collection('comments').get(),
+);
+
+// --- post creation --------------------------------------------------------
+await allows('gold member creates a post', () =>
+  goldAlice.collection('goldCirclePosts').add(validPost(ALICE)),
+);
+await denies('free member cannot create a post', () =>
+  goldCarol.collection('goldCirclePosts').add(validPost(CAROL)),
+);
+await denies('gold member cannot spoof the author', () =>
+  goldAlice.collection('goldCirclePosts').add(validPost(CAROL)),
+);
+await denies('post with extra fields is rejected', () =>
+  goldAlice.collection('goldCirclePosts').add({ ...validPost(ALICE), isGold: true }),
+);
+await denies('post born already liked is rejected', () =>
+  goldAlice.collection('goldCirclePosts').add({
+    ...validPost(ALICE), likedBy: [ALICE], likeCount: 1,
+  }),
+);
+await denies('post with a forged timestamp is rejected', () =>
+  goldAlice.collection('goldCirclePosts').add({
+    ...validPost(ALICE), createdAt: new Date('2020-01-01T00:00:00Z'),
+  }),
+);
+await denies('free member cannot create a comment', () =>
+  goldCarol.doc('goldCirclePosts/gpost1/comments/cfree').set(validComment(CAROL)),
+);
+
+// --- likes: self-only toggle, count mirrors the array ---------------------
+await allows('gold member likes a post', () =>
+  goldAlice.doc('goldCirclePosts/gpost2').update({ likedBy: [ALICE], likeCount: 1 }),
+);
+await allows('gold member unlikes a post', () =>
+  goldAlice.doc('goldCirclePosts/gpost2').update({ likedBy: [], likeCount: 0 }),
+);
+await denies('free member cannot like', () =>
+  goldCarol.doc('goldCirclePosts/gpost2').update({ likedBy: [CAROL], likeCount: 1 }),
+);
+await denies('cannot smuggle another uid into likedBy', () =>
+  goldAlice.doc('goldCirclePosts/gpost2').update({ likedBy: [ALICE, BOB], likeCount: 2 }),
+);
+await allows('author likes their own post', () =>
+  goldDave.doc('goldCirclePosts/gpost2').update({ likedBy: [DAVE], likeCount: 1 }),
+);
+await denies('cannot wipe someone elses like', () =>
+  goldAlice.doc('goldCirclePosts/gpost2').update({ likedBy: [], likeCount: 0 }),
+);
+await allows('a second member can like alongside', () =>
+  goldAlice.doc('goldCirclePosts/gpost2').update({ likedBy: [DAVE, ALICE], likeCount: 2 }),
+);
+await denies('likeCount cannot drift from likedBy.size()', () =>
+  goldAlice.doc('goldCirclePosts/gpost2').update({ likedBy: [DAVE, ALICE], likeCount: 7 }),
+);
+await allows('member unlikes leaving the other like intact', () =>
+  goldAlice.doc('goldCirclePosts/gpost2').update({ likedBy: [DAVE], likeCount: 1 }),
+);
+await denies('post content cannot be rewritten', () =>
+  goldAlice.doc('goldCirclePosts/gpost2').update({ text: 'edited by someone else' }),
+);
+await denies('post authorship cannot be reassigned', () =>
+  goldAlice.doc('goldCirclePosts/gpost2').update({ authorUid: ALICE }),
+);
+
+// --- comments: immutable, parent must exist, counter ±1 -------------------
+await allows('gold member comments + bumps the counter (batch)', () => {
+  const batch = goldAlice.batch();
+  batch.set(goldAlice.doc('goldCirclePosts/gpost1/comments/gc2'), validComment(ALICE));
+  batch.update(goldAlice.doc('goldCirclePosts/gpost1'), { commentCount: 2 });
+  return batch.commit();
+});
+await denies('comment cannot target a missing post', () =>
+  goldAlice.doc('goldCirclePosts/missing00/comments/cx').set(validComment(ALICE)),
+);
+await denies('comment author cannot be spoofed', () =>
+  goldAlice.doc('goldCirclePosts/gpost1/comments/cspoof').set(validComment(BOB)),
+);
+await denies('comment text is immutable', () =>
+  goldAlice.doc('goldCirclePosts/gpost1/comments/gc2').update({ text: 'edited' }),
+);
+await denies('free member cannot bump the counter', () =>
+  goldCarol.doc('goldCirclePosts/gpost1').update({ commentCount: 99 }),
+);
+await denies('counter cannot jump more than one', () =>
+  goldAlice.doc('goldCirclePosts/gpost1').update({ commentCount: 5 }),
+);
+await allows('counter decrements by one', () =>
+  goldAlice.doc('goldCirclePosts/gpost1').update({ commentCount: 1 }),
+);
+await allows('counter increments back by one', () =>
+  goldAlice.doc('goldCirclePosts/gpost1').update({ commentCount: 2 }),
+);
+await denies('gold member cannot delete someone elses comment', () =>
+  goldAlice.doc('goldCirclePosts/gpost1/comments/gc1').delete(),
+);
+await allows('comment author deletes own comment + counter (batch)', () => {
+  const batch = goldDave.batch();
+  batch.delete(goldDave.doc('goldCirclePosts/gpost1/comments/gc1'));
+  batch.update(goldDave.doc('goldCirclePosts/gpost1'), { commentCount: 1 });
+  return batch.commit();
+});
+
+// --- deletions: own post or admin ----------------------------------------
+await denies('gold member cannot delete someone elses post', () =>
+  goldAlice.doc('goldCirclePosts/gpost2').delete(),
+);
+await denies('free member cannot delete a post', () =>
+  goldCarol.doc('goldCirclePosts/gpost1').delete(),
+);
+await allows('author deletes their own post', () =>
+  goldDave.doc('goldCirclePosts/gpost2').delete(),
+);
+await allows('admin removes a post', () => goldAdmin.doc('goldCirclePosts/gpost1').delete());
 
 console.log(`\n${passed} passed, ${failed} failed`);
 await env.cleanup();

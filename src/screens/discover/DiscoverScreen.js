@@ -215,6 +215,50 @@ const DiscoverScreen = ({ navigation }) => {
         </TouchableOpacity>
       )}
 
+      {/* 💛 Gold Circle promo — same premium ecosystem, routes through the
+          existing GoldCircle screen which applies the Gold gate itself. */}
+      <TouchableOpacity
+        style={styles.circleBanner}
+        activeOpacity={0.9}
+        onPress={() => navigation.navigate('GoldCircle')}
+        accessibilityRole="button"
+        accessibilityLabel="Explore Gold Circle"
+      >
+        <View style={styles.circleBannerInner}>
+          <View style={styles.circleHeadRow}>
+            <Text style={styles.circleTitle}>💛 GOLD CIRCLE</Text>
+            <Ionicons name="chatbubbles-outline" size={16} color={colors.gold} />
+          </View>
+          <Text style={styles.circleTagline}>More than matching. Be part of the conversation.</Text>
+          <Text style={styles.circleBody} numberOfLines={2}>
+            Join an exclusive community where Gold members share dating experiences, relationship
+            conversations, photos, questions and success stories.
+          </Text>
+
+          <View style={styles.circleFooter}>
+            <View style={styles.circleStatusWrap}>
+              <Text style={[styles.circleStatus, isGold && styles.circleStatusGold]}>
+                {isGold ? '✓ You’re a Gold Member' : '🔒 Gold Members Only'}
+              </Text>
+              {!isGold ? (
+                <Text style={styles.circleStatusHint}>Unlock Malindi Gold to enter Gold Circle</Text>
+              ) : null}
+            </View>
+            <LinearGradient
+              colors={gradients.gold}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={styles.circleCta}
+            >
+              <Text style={styles.circleCtaText}>
+                {isGold ? 'Enter Gold Circle' : 'Explore Gold Circle'}
+              </Text>
+              <Ionicons name="chevron-forward" size={15} color={colors.black} />
+            </LinearGradient>
+          </View>
+        </View>
+      </TouchableOpacity>
+
       <View style={styles.body}>
         {loading ? (
           <View style={styles.loadingWrap}>
@@ -354,6 +398,45 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     letterSpacing: 0.5,
   },
+
+  circleBanner: {
+    marginHorizontal: spacing.lg,
+    marginBottom: spacing.sm,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.gold,
+    backgroundColor: colors.surface,
+    overflow: 'hidden',
+  },
+  circleBannerInner: { paddingHorizontal: spacing.md, paddingVertical: spacing.sm, gap: 3 },
+  circleHeadRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  circleTitle: { color: colors.gold, fontSize: 13, fontWeight: '900', letterSpacing: 1 },
+  circleTagline: { color: colors.text, fontSize: 13, fontWeight: '800' },
+  circleBody: { color: colors.textSecondary, fontSize: 12, lineHeight: 17 },
+  circleFooter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.md,
+    marginTop: spacing.xs,
+  },
+  circleStatusWrap: { flex: 1 },
+  circleStatus: { color: colors.textMuted, fontSize: 11, fontWeight: '800' },
+  circleStatusGold: { color: colors.gold },
+  circleStatusHint: { color: colors.textMuted, fontSize: 11, fontWeight: '600', marginTop: 1 },
+  circleCta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 7,
+    borderRadius: radius.round,
+  },
+  circleCtaText: { color: colors.black, fontSize: 12, fontWeight: '900' },
   cardHost: { flex: 1 },
   cardTouch: { ...StyleSheet.absoluteFillObject, backgroundColor: 'transparent' },
   stamp: {

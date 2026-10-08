@@ -7,8 +7,9 @@
  *   · no recurring fee
  *   · no expiry
  *
- * Payments are NOT connected yet (demo mode). These values only drive the
- * paywall UI and the service-level entitlement gates.
+ * Payment is handled server-side by the Render backend via M-Pesa (Daraja).
+ * These values drive the paywall UI; the backend independently enforces the
+ * KSh 100 price and owns Gold activation.
  */
 
 /** How many incoming likes a free member sees clearly before the blur starts. */

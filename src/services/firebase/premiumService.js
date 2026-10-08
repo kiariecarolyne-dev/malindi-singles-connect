@@ -19,6 +19,8 @@ import { getDoc, getDocs, limit, query, where } from 'firebase/firestore';
 import { FREE_VISIBLE_LIKES, GOLD } from '../../constants/plans';
 import { calculateAge } from '../../utils/age';
 import { compatibilityScore } from '../../utils/compatibility';
+import { startGoldPayment, getPaymentStatus } from '../backend/paymentService';
+import { getFirebaseAuth } from './firebaseConfig';
 import { col, docRef, docToModel, docsToModels } from './helpers';
 import {
   fetchBlockedUids,
@@ -239,33 +241,39 @@ export const canViewFullProfile = async (viewerUid, targetUid) => {
 };
 
 /* ------------------------------------------------------------------ *
- * 💎 Malindi Gold — checkout (payments arrive in the next phase)      *
+ * 💎 Malindi Gold — M-Pesa checkout (via the backend / Daraja)         *
  * ------------------------------------------------------------------ */
 
 /**
- * Starts a Gold purchase.
- *
- * M-Pesa/Daraja is NOT wired up yet, so this returns a clearly labelled
- * "not connected" result: no money moves, no receipt is invented and no
- * entitlement can be written from here. The next phase replaces this with
- * an STK push for KSh 100 and resolves `paymentsConnected: true`.
+ * Starts a Gold purchase by asking the backend to send an M-Pesa (STK) push
+ * for the fixed KSh 100 price. The backend owns the amount and the UID; this
+ * function only forwards the customer's phone number and returns the
+ * paymentId used to poll status. Gold can NEVER be written from here.
  */
-export const createGoldCheckout = async (uid) => {
+export const createGoldCheckout = async (phoneNumber) => {
+  const uid = getFirebaseAuth().currentUser?.uid;
+  if (!uid) throw new Error('You must be signed in to buy Malindi Gold.');
+
   const entitlement = await getEntitlement(uid);
   if (entitlement.isGold) {
-    return { status: 'already_gold', paymentsConnected: false, entitlement };
+    return { status: 'already_gold', paymentsConnected: true, entitlement };
   }
+
+  const result = await startGoldPayment(phoneNumber);
   return {
-    status: 'payments_not_connected',
-    paymentsConnected: false,
+    status: 'pending',
+    paymentsConnected: true,
+    paymentId: result.paymentId,
+    checkoutRequestId: result.checkoutRequestId,
     amount: GOLD.price,
     amountLabel: GOLD.priceLabel,
     currency: GOLD.currency,
     billing: 'one_time',
-    message:
-      'M-Pesa payments arrive in the next phase — nothing is charged and Gold stays locked until then.',
   };
 };
+
+/** Poll the backend for a payment's status. */
+export const getGoldPaymentStatus = (paymentId) => getPaymentStatus(paymentId);
 
 export default {
   isGold,
@@ -276,4 +284,5 @@ export default {
   isLikeLocked,
   canViewFullProfile,
   createGoldCheckout,
+  getGoldPaymentStatus,
 };

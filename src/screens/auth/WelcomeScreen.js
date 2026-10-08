@@ -1,5 +1,5 @@
 import React from 'react';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Image, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -7,6 +7,8 @@ import Button from '../../components/Button';
 import Logo from '../../components/Logo';
 import { APP } from '../../config/env';
 import { colors, radius, spacing } from '../../theme';
+
+const DATING_HERO = require('../../../assets/dating-hero.jpg');
 
 const HIGHLIGHTS = [
   { emoji: '🔥', text: 'Singles active around Malindi now' },
@@ -17,6 +19,9 @@ const HIGHLIGHTS = [
 
 const WelcomeScreen = ({ navigation }) => {
   const insets = useSafeAreaInsets();
+  const { width } = useWindowDimensions();
+  const heroWidth = Math.min(width - spacing.xl * 2, 520);
+  const heroHeight = (heroWidth * 9) / 16;
 
   return (
     <View style={styles.root}>
@@ -35,7 +40,18 @@ const WelcomeScreen = ({ navigation }) => {
         showsVerticalScrollIndicator={false}
       >
         <View style={styles.hero}>
-          <Logo size={96} />
+          <View style={[styles.heroImageWrap, { width: heroWidth, height: heroHeight }]}>
+            <Image source={DATING_HERO} style={styles.heroImage} resizeMode="cover" />
+            <LinearGradient
+              colors={['rgba(10, 15, 30, 0)', 'rgba(10, 15, 30, 0.15)', 'rgba(10, 15, 30, 0.7)']}
+              locations={[0, 0.65, 1]}
+              style={StyleSheet.absoluteFill}
+            />
+          </View>
+
+          <View style={styles.logoWrap}>
+            <Logo size={96} />
+          </View>
           <Text style={styles.title}>
             <Text style={{ color: colors.primary }}>❤️ </Text>
             {APP.name}
@@ -89,6 +105,15 @@ const styles = StyleSheet.create({
   glowBottom: { bottom: -130, left: -110, backgroundColor: colors.secondary },
   content: { paddingHorizontal: spacing.xl, flexGrow: 1, justifyContent: 'center' },
   hero: { alignItems: 'center' },
+  heroImageWrap: {
+    borderRadius: radius.xl,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+  },
+  heroImage: { width: '100%', height: '100%' },
+  logoWrap: { marginTop: spacing.xl },
   title: {
     color: colors.text,
     fontSize: 30,

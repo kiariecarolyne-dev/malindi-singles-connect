@@ -1,57 +1,145 @@
-import React, { useState } from 'react';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  ActivityIndicator,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 
 import Button from '../../components/Button';
 import Screen from '../../components/Screen';
 import ScreenHeader from '../../components/ScreenHeader';
-import { GOLD, PLANS, FREE_VISIBLE_LIKES } from '../../constants/plans';
+import { GOLD, PLANS } from '../../constants/plans';
 import { useAuth } from '../../context/AuthContext';
 import { premiumService } from '../../services';
 import { colors, gradients, radius, spacing } from '../../theme';
 
+const POLL_INTERVAL_MS = 2500;
+const POLL_TIMEOUT_MS = 75000;
+
 /**
  * 💎 Malindi Gold paywall.
  *
- * Gold is a ONE-TIME KSh 100 purchase: no monthly fee, no renewal, no
- * expiry. M-Pesa/Daraja is not connected yet, so the buy button shows an
- * honest "payments not connected" note instead of pretending a payment
- * succeeded. No Gold can be granted from this screen.
+ * Gold is a ONE-TIME KSh 100 M-Pesa purchase: no monthly fee, no renewal,
+ * no expiry. The backend (Daraja) owns the amount and activates Gold only
+ * after a verified successful payment. This screen just collects the phone
+ * number and polls for the result — it can never grant Gold.
  */
 const PremiumScreen = ({ navigation }) => {
-  const { user, profile, refreshProfile } = useAuth();
+  const { profile, refreshProfile } = useAuth();
   const gold = premiumService.isGold(profile);
   const entitlement = profile?.gold?.isGold ? profile.gold : profile?.premium;
 
-  const [checkout, setCheckout] = useState(null);
-  const [busy, setBusy] = useState(false);
+  const [stage, setStage] = useState('idle'); // idle | phone | pending | success | failed | timeout
+  const [phone, setPhone] = useState('');
   const [error, setError] = useState(null);
+  const [message, setMessage] = useState(null);
+  const [busy, setBusy] = useState(false);
 
-  const run = async (fn) => {
-    setBusy(true);
+  const pollRef = useRef(null);
+  const mountedRef = useRef(true);
+
+  const stopPolling = useCallback(() => {
+    if (pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+  }, []);
+
+  useEffect(
+    () => () => {
+      mountedRef.current = false;
+      stopPolling();
+    },
+    [stopPolling],
+  );
+
+  const beginPolling = useCallback(
+    (paymentId) => {
+      stopPolling();
+      const startedAt = Date.now();
+
+      pollRef.current = setInterval(async () => {
+        if (!mountedRef.current) return;
+
+        if (Date.now() - startedAt > POLL_TIMEOUT_MS) {
+          stopPolling();
+          setStage('timeout');
+          setMessage(
+            "We couldn't confirm the payment yet. Please check your M-Pesa messages or try again.",
+          );
+          return;
+        }
+
+        try {
+          const payment = await premiumService.getGoldPaymentStatus(paymentId);
+          if (!payment || !mountedRef.current) return;
+
+          if (payment.gold || payment.status === 'success') {
+            stopPolling();
+            await refreshProfile();
+            if (!mountedRef.current) return;
+            setStage('success');
+            setMessage('Malindi Gold is active — every like is now unlocked.');
+          } else if (payment.status === 'failed') {
+            stopPolling();
+            setStage('failed');
+            setError(
+              payment.resultDescription ||
+                'The M-Pesa payment did not go through. Gold stays locked and you were not charged for Gold.',
+            );
+          }
+          // status 'pending' -> keep polling
+        } catch (_e) {
+          // Transient network error — keep polling until the timeout.
+        }
+      }, POLL_INTERVAL_MS);
+    },
+    [refreshProfile, stopPolling],
+  );
+
+  const startPayment = async () => {
     setError(null);
+    setMessage(null);
+    setBusy(true);
     try {
-      await fn();
+      const result = await premiumService.createGoldCheckout(phone.trim());
+
+      if (result.status === 'already_gold') {
+        await refreshProfile();
+        setStage('success');
+        setMessage('Malindi Gold is already active on your account.');
+        return;
+      }
+
+      setStage('pending');
+      setMessage(
+        'An M-Pesa payment request has been sent to your phone. Enter your M-Pesa PIN to complete the payment.',
+      );
+      beginPolling(result.paymentId);
     } catch (e) {
-      setError(e.message || 'Something went wrong. Please try again.');
+      setStage('failed');
+      setError(e.message || 'Could not start the M-Pesa payment. Please try again.');
     } finally {
       setBusy(false);
     }
   };
 
-  const startCheckout = () =>
-    run(async () => {
-      const result = await premiumService.createGoldCheckout(user.uid);
-      if (result.status === 'already_gold') {
-        await refreshProfile();
-      } else {
-        setCheckout(result);
-      }
-    });
+  const reset = () => {
+    stopPolling();
+    setStage('idle');
+    setPhone('');
+    setError(null);
+    setMessage(null);
+  };
 
   const { free, premium } = PLANS;
   const activatedOn = entitlement?.goldActivatedAt || entitlement?.since;
+  const isGoldActive = gold || stage === 'success';
 
   return (
     <Screen edges={['top']}>
@@ -69,7 +157,7 @@ const PremiumScreen = ({ navigation }) => {
           <Text style={styles.heroPrice}>{GOLD.priceLabel}</Text>
           <Text style={styles.heroBilling}>{GOLD.billingLabel} · LIFETIME ACCESS</Text>
           <Text style={styles.heroSub}>{GOLD.noFees}</Text>
-          {gold ? (
+          {isGoldActive ? (
             <View style={styles.activePill}>
               <Ionicons name="checkmark-circle" size={15} color={colors.black} />
               <Text style={styles.activePillText}>Gold active — every like unlocked</Text>
@@ -90,70 +178,96 @@ const PremiumScreen = ({ navigation }) => {
 
         {/* ⚖️ Free vs Gold */}
         <View style={styles.compareRow}>
-          <View style={[styles.planCard, !gold && styles.planCardCurrent]}>
+          <View style={[styles.planCard, !isGoldActive && styles.planCardCurrent]}>
             <Text style={styles.planName}>{free.name}</Text>
             <Text style={styles.planPrice}>{free.price}</Text>
             <View style={styles.featureRow}>
-              <Ionicons name="checkmark" size={15} color={colors.success} />
-              <Text style={styles.featureText}>First {FREE_VISIBLE_LIKES} likes you can see clearly</Text>
+              <Ionicons name="checkmark-circle" size={16} color={colors.gold} />
+              <Text style={styles.featureText}>{free.features[0]}</Text>
             </View>
-            <View style={styles.featureRow}>
-              <Ionicons name="close" size={15} color={colors.textMuted} />
-              <Text style={[styles.featureText, styles.missing]}>Everyone who likes you</Text>
-            </View>
-            <View style={styles.featureRow}>
-              <Ionicons name="close" size={15} color={colors.textMuted} />
-              <Text style={[styles.featureText, styles.missing]}>Unblurred like photos</Text>
-            </View>
+            {free.missing.map((m) => (
+              <View key={m} style={styles.featureRow}>
+                <Ionicons name="close-circle" size={16} color={colors.textMuted} />
+                <Text style={[styles.featureText, styles.missingText]}>{m}</Text>
+              </View>
+            ))}
           </View>
-
-          <View style={[styles.planCard, gold && styles.planCardCurrent, styles.goldCard]}>
-            <Text style={[styles.planName, styles.goldName]}>{premium.name}</Text>
-            <Text style={styles.planPrice}>{GOLD.priceLabel} one-time</Text>
-            {premium.features.map((f) => (
-              <View key={f} style={styles.featureRow}>
-                <Ionicons name="checkmark" size={15} color={colors.gold} />
-                <Text style={styles.featureText}>{f}</Text>
+          <View style={[styles.planCard, isGoldActive && styles.planCardCurrent]}>
+            <Text style={[styles.planName, styles.planNameGold]}>{premium.name}</Text>
+            <Text style={styles.planPrice}>{GOLD.priceLabel}</Text>
+            {GOLD.benefits.slice(0, 3).map((b) => (
+              <View key={b} style={styles.featureRow}>
+                <Ionicons name="checkmark-circle" size={16} color={colors.gold} />
+                <Text style={styles.featureText}>{b}</Text>
               </View>
             ))}
           </View>
         </View>
 
-        {error ? <Text style={styles.error}>{error}</Text> : null}
-
-        {/* 🛒 Checkout */}
-        {gold ? (
+        {/* 💳 Checkout / status */}
+        {isGoldActive ? (
           <View style={styles.owned}>
-            <Ionicons name="shield-checkmark" size={20} color={colors.success} />
+            <Ionicons name="checkmark-circle" size={22} color={colors.success} />
             <View style={{ flex: 1 }}>
-              <Text style={styles.ownedTitle}>You own Malindi Gold</Text>
+              <Text style={styles.ownedTitle}>Malindi Gold is active</Text>
               <Text style={styles.ownedSub}>
-                {activatedOn
-                  ? `Activated ${new Date(activatedOn).toLocaleDateString()} · never expires`
-                  : 'Lifetime access · never expires'}
+                Lifetime access — it never expires.
+                {activatedOn ? ` Activated ${new Date(activatedOn).toLocaleDateString()}.` : ''}
               </Text>
             </View>
           </View>
-        ) : checkout ? (
-          <View style={styles.paywallNote}>
-            <View style={styles.paywallHead}>
-              <Ionicons name="wallet-outline" size={16} color={colors.black} />
-              <Text style={styles.paywallHeadText}>M-PESA IS NOT CONNECTED YET</Text>
-            </View>
-            <Text style={styles.paywallLine}>
-              {GOLD.name}: {checkout.amountLabel || GOLD.priceLabel} ({GOLD.billingLabel.toLowerCase()})
+        ) : stage === 'pending' ? (
+          <View style={styles.statusCard}>
+            <ActivityIndicator color={colors.gold} size="large" />
+            <Text style={styles.statusTitle}>Check your phone</Text>
+            <Text style={styles.statusText}>{message}</Text>
+            <Text style={styles.statusHint}>
+              Keep this screen open while we confirm your payment. This can take up to a minute.
             </Text>
-            <Text style={styles.paywallNoteText}>
-              {checkout.message} Gold stays locked for everyone until payments go live, and nothing
-              is charged by tapping here.
-            </Text>
-            <Button
-              title="Close"
-              variant="ghost"
-              onPress={() => setCheckout(null)}
-              disabled={busy}
-              style={styles.back}
+            <Button title="Cancel" variant="ghost" onPress={reset} style={styles.statusBtn} />
+          </View>
+        ) : stage === 'failed' || stage === 'timeout' ? (
+          <View style={styles.statusCard}>
+            <Ionicons
+              name={stage === 'timeout' ? 'time-outline' : 'alert-circle-outline'}
+              size={34}
+              color={colors.gold}
             />
+            <Text style={styles.statusTitle}>
+              {stage === 'timeout' ? 'Payment not confirmed yet' : 'Payment not completed'}
+            </Text>
+            <Text style={styles.statusText}>{error || message}</Text>
+            <Button title="Try again" variant="gold" onPress={reset} style={styles.statusBtn} />
+          </View>
+        ) : stage === 'phone' ? (
+          <View style={styles.phoneCard}>
+            <Text style={styles.phoneLabel}>M-Pesa phone number</Text>
+            <TextInput
+              style={styles.phoneInput}
+              value={phone}
+              onChangeText={setPhone}
+              placeholder="07XXXXXXXX"
+              placeholderTextColor={colors.textMuted}
+              keyboardType="phone-pad"
+              maxLength={13}
+              editable={!busy}
+              autoFocus
+            />
+            <Text style={styles.phoneHint}>
+              {GOLD.name}: {GOLD.priceLabel} ({GOLD.billingLabel.toLowerCase()}). You will receive
+              an M-Pesa prompt on this number.
+            </Text>
+            {error ? <Text style={styles.errorText}>{error}</Text> : null}
+            <Button
+              title="Pay KSh 100"
+              variant="gold"
+              icon="phone-portrait-outline"
+              onPress={startPayment}
+              loading={busy}
+              disabled={phone.trim().length < 9 || busy}
+              style={styles.payBtn}
+            />
+            <Button title="Cancel" variant="ghost" onPress={reset} disabled={busy} />
           </View>
         ) : (
           <>
@@ -161,13 +275,12 @@ const PremiumScreen = ({ navigation }) => {
               title={GOLD.unlockCta}
               variant="gold"
               icon="diamond"
-              onPress={startCheckout}
-              loading={busy}
+              onPress={() => setStage('phone')}
               style={styles.cta}
             />
             <Text style={styles.honest}>
-              {GOLD.closing} Payments are not connected yet — the button shows what M-Pesa will
-              charge, and no Gold is granted until then.
+              {GOLD.closing} You pay KSh 100 once via M-Pesa — Gold is unlocked only after the
+              payment is confirmed.
             </Text>
           </>
         )}
@@ -243,49 +356,67 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.border,
   },
-  planCardCurrent: { borderColor: colors.primary },
-  goldCard: { borderColor: colors.gold },
-  planName: { color: colors.text, fontSize: 16, fontWeight: '900' },
-  goldName: { color: colors.gold },
+  planCardCurrent: { borderColor: colors.gold },
+  planName: { color: colors.text, fontSize: 15, fontWeight: '800' },
+  planNameGold: { color: colors.gold },
   planPrice: { color: colors.textSecondary, fontSize: 13, marginTop: 2, marginBottom: spacing.sm },
-  featureRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 6, marginTop: 5 },
-  featureText: { color: colors.textSecondary, fontSize: 12, lineHeight: 17, flex: 1 },
-  missing: { color: colors.textMuted, textDecorationLine: 'line-through' },
-
-  paywallNote: {
-    backgroundColor: colors.surface,
-    borderRadius: radius.lg,
-    padding: spacing.lg,
-    borderWidth: 1,
-    borderColor: colors.warning,
-    marginTop: spacing.xl,
-  },
-  paywallHead: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    backgroundColor: colors.warning,
-    borderRadius: radius.sm,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 6,
-  },
-  paywallHeadText: { color: colors.black, fontSize: 10, fontWeight: '900', letterSpacing: 0.5, flex: 1 },
-  paywallLine: { color: colors.text, fontSize: 14, fontWeight: '700', marginTop: spacing.md },
-  paywallNoteText: { color: colors.textMuted, fontSize: 12, lineHeight: 18, marginTop: spacing.sm },
+  featureRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 6 },
+  featureText: { color: colors.textSecondary, fontSize: 13, flex: 1, lineHeight: 18 },
+  missingText: { color: colors.textMuted, textDecorationLine: 'line-through' },
 
   owned: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.md,
-    backgroundColor: colors.successSoft,
+    backgroundColor: colors.surface,
     borderRadius: radius.lg,
     padding: spacing.lg,
-    marginTop: spacing.xl,
     borderWidth: 1,
     borderColor: colors.success,
+    marginTop: spacing.lg,
   },
   ownedTitle: { color: colors.text, fontSize: 15, fontWeight: '800' },
-  ownedSub: { color: colors.textSecondary, fontSize: 12, marginTop: 2 },
+  ownedSub: { color: colors.textSecondary, fontSize: 12, marginTop: 2, lineHeight: 17 },
+
+  statusCard: {
+    backgroundColor: colors.surface,
+    borderRadius: radius.lg,
+    padding: spacing.xl,
+    borderWidth: 1,
+    borderColor: colors.gold,
+    marginTop: spacing.lg,
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  statusTitle: { color: colors.text, fontSize: 17, fontWeight: '900', textAlign: 'center' },
+  statusText: { color: colors.textSecondary, fontSize: 13, textAlign: 'center', lineHeight: 19 },
+  statusHint: { color: colors.textMuted, fontSize: 11, textAlign: 'center', lineHeight: 16 },
+  statusBtn: { alignSelf: 'stretch', marginTop: spacing.sm },
+
+  phoneCard: {
+    backgroundColor: colors.surface,
+    borderRadius: radius.lg,
+    padding: spacing.lg,
+    borderWidth: 1,
+    borderColor: colors.gold,
+    marginTop: spacing.lg,
+  },
+  phoneLabel: { color: colors.text, fontSize: 14, fontWeight: '800', marginBottom: spacing.sm },
+  phoneInput: {
+    backgroundColor: colors.background,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    color: colors.text,
+    fontSize: 18,
+    fontWeight: '700',
+    letterSpacing: 1,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.md,
+  },
+  phoneHint: { color: colors.textMuted, fontSize: 12, lineHeight: 17, marginTop: spacing.sm },
+  errorText: { color: colors.danger, fontSize: 13, marginTop: spacing.sm },
+  payBtn: { marginTop: spacing.md },
 
   cta: { marginTop: spacing.xl },
   honest: {
@@ -293,10 +424,9 @@ const styles = StyleSheet.create({
     fontSize: 12,
     lineHeight: 18,
     textAlign: 'center',
-    marginTop: spacing.md,
+    marginTop: spacing.sm,
   },
-  error: { color: colors.danger, fontSize: 13, marginTop: spacing.md, textAlign: 'center' },
-  back: { marginTop: spacing.sm },
+  back: { marginTop: spacing.xl },
 });
 
 export default PremiumScreen;

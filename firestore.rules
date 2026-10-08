@@ -172,24 +172,13 @@ service cloud.firestore {
      * ---------------------------------------------------------------- */
 
     match /meetups/{meetupId} {
-      allow get: if signedIn() &&
-        (resource == null || uid() in [resource.data.fromUid, resource.data.toUid]);
-      allow list: if signedIn() &&
-        uid() in [resource.data.fromUid, resource.data.toUid];
-
-      allow create: if signedIn() &&
-        request.resource.data.fromUid == uid() &&
-        request.resource.data.status == 'pending';
-
-      // Only the receiver answers, and only the answer fields change.
-      allow update: if signedIn() &&
-        resource.data.toUid == uid() &&
-        request.resource.data.status in ['accepted', 'declined'] &&
-        request.resource.data.diff(resource.data).affectedKeys()
-          .hasOnly(['status', 'respondedAt', 'respondedBy']);
-
+      allow get: if signedIn() && (resource == null || uid() in [resource.data.fromUid, resource.data.toUid]);
+      allow list: if signedIn() && (resource.data.fromUid == uid() || resource.data.toUid == uid());
+      allow create: if signedIn() && request.resource.data.fromUid == uid() && request.resource.data.status == 'pending';
+      allow update: if signedIn() && resource.data.toUid == uid() && request.resource.data.status in ['accepted', 'declined'] && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'respondedAt', 'respondedBy']);
       allow delete: if isAdmin();
     }
+
 
     /* ---------------------------------------------------------------- *
      * blocks — direction matters for both queries the deck runs          *

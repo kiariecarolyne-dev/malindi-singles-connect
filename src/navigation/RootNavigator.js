@@ -16,9 +16,9 @@ import { colors, spacing } from '../theme';
  *  otherwise         -> main app
  */
 const RootNavigator = () => {
-  const { initializing, user, profileComplete } = useAuth();
+  const { initializing, user, profileComplete, profileLoaded } = useAuth();
 
-  if (initializing) {
+  if (initializing || (user && !profileLoaded)) {
     return (
       <View style={styles.splash}>
         <Logo size={92} />

@@ -8,7 +8,7 @@ import Logo from '../../components/Logo';
 import { APP } from '../../config/env';
 import { colors, radius, spacing } from '../../theme';
 
-const DATING_HERO = require('../../../assets/dating-hero.jpg');
+const DATING_HERO = require('../../../assets/malindi-singles3.jpeg');
 
 const HIGHLIGHTS = [
   { emoji: '🔥', text: 'Singles active around Malindi now' },

@@ -22,19 +22,28 @@ export const AuthProvider = ({ children }) => {
   const [initializing, setInitializing] = useState(true);
   const [user, setUser] = useState(null);
   const [profile, setProfile] = useState(null);
+  const [profileLoading, setProfileLoading] = useState(false);
+  const [profileLoaded, setProfileLoaded] = useState(false);
   const [profileVersion, setProfileVersion] = useState(0);
   const authMeTestRan = useRef(false);
 
   const loadProfile = useCallback(async (uid) => {
     if (!uid) {
       setProfile(null);
+      setProfileLoaded(true);
       return;
     }
+    setProfileLoading(true);
+    setProfileLoaded(false);
     try {
       const p = await profileService.getProfile(uid);
       setProfile(p);
+      setProfileLoaded(true);
     } catch {
       setProfile(null);
+      setProfileLoaded(true);
+    } finally {
+      setProfileLoading(false);
     }
   }, []);
 
@@ -132,11 +141,11 @@ export const AuthProvider = ({ children }) => {
   );
 
   const profileComplete = useMemo(() => {
-    if (!profile) return false;
+    if (!profile || !profileLoaded) return false;
     return Boolean(
-      profile.photos?.length > 0 && profile.bio?.trim() && profile.area && profile.datingIntention,
+      profile.bio?.trim() && profile.area && profile.datingIntention,
     );
-  }, [profile]);
+  }, [profile, profileLoaded]);
 
   const value = useMemo(
     () => ({
@@ -145,6 +154,8 @@ export const AuthProvider = ({ children }) => {
       profile,
       profileVersion,
       profileComplete,
+      profileLoaded,
+      profileLoading,
       signIn,
       signUp,
       signOut,
@@ -159,12 +170,14 @@ export const AuthProvider = ({ children }) => {
       profile,
       profileVersion,
       profileComplete,
+      profileLoaded,
+      profileLoading,
+      refreshProfile,
+      updateProfileLocal,
+      saveProfile,
       signIn,
       signUp,
       signOut,
-      saveProfile,
-      refreshProfile,
-      updateProfileLocal,
     ],
   );
 

@@ -40,10 +40,11 @@ import {
 } from 'firebase/firestore';
 
 import { LIMITS } from '../../config/env';
+import { calculateAge } from '../../utils/age';
 import { uploadProfilePhotoViaBackend } from '../backend/photoService';
 import { deleteProfilePhoto } from '../supabase/storage';
 import { getDb } from './firebaseConfig';
-import { col, docRef, docsToModels, friendlyError } from './helpers';
+import { blockDocId, col, docRef, docsToModels, friendlyError } from './helpers';
 import { fetchBlockedUids, fetchProfileDoc } from './deck';
 import * as premiumService from './premiumService';
 
@@ -79,6 +80,21 @@ export const assertGoldMember = async (uid) => {
     throw error;
   }
   return entitlement;
+};
+
+/**
+ * Throw when a block exists in either direction between the viewer and the
+ * other member. Enforced again in `firestore.rules`; this pre-flight check
+ * keeps the UI from firing a write the server would reject.
+ */
+const assertNotBlocked = async (uid, otherUid) => {
+  if (!uid || !otherUid || uid === otherUid) return;
+  const snapshot = await getDoc(docRef('blocks', blockDocId(uid, otherUid)));
+  if (snapshot.exists()) {
+    const error = new Error('You can no longer interact with this member.');
+    error.code = 'blocked';
+    throw error;
+  }
 };
 
 /* ------------------------------------------------------------------ *
@@ -144,10 +160,13 @@ const hydratePage = async (rows, viewerUid) => {
     if (blocked.has(row.authorUid)) return;
     const author = byUid.get(row.authorUid);
     if (author?.suspended) return;
+    const age = author?.dateOfBirth ? calculateAge(author.dateOfBirth) : 0;
     visible.push({
       ...row,
       authorName: author?.fullName || row.authorName,
       authorAvatar: author?.photos?.[0] || row.authorAvatar || null,
+      authorAge: age > 0 ? age : null,
+      authorArea: author?.area || null,
     });
   });
   return visible;
@@ -182,7 +201,30 @@ export const getComments = async (viewerUid, postId) => {
     const snapshot = await getDocs(
       query(collection(getDb(), POSTS, postId, 'comments'), orderBy('createdAt', 'asc'), fsLimit(100)),
     );
-    return docsToModels(snapshot);
+    const rows = docsToModels(snapshot);
+
+    // Fresh author identity + the same block/suspension filtering as the feed.
+    const authorUids = [...new Set(rows.map((row) => row.authorUid).filter(Boolean))];
+    const [blocked, profiles] = await Promise.all([
+      fetchBlockedUids(viewerUid),
+      Promise.all(authorUids.map((uid) => fetchProfileDoc(uid))),
+    ]);
+    const byUid = new Map(authorUids.map((uid, i) => [uid, profiles[i]]));
+
+    return rows
+      .filter((row) => !blocked.has(row.authorUid))
+      .filter((row) => !byUid.get(row.authorUid)?.suspended)
+      .map((row) => {
+        const author = byUid.get(row.authorUid);
+        const age = author?.dateOfBirth ? calculateAge(author.dateOfBirth) : 0;
+        return {
+          ...row,
+          authorName: author?.fullName || row.authorName,
+          authorAvatar: author?.photos?.[0] || row.authorAvatar || null,
+          authorAge: age > 0 ? age : null,
+          authorArea: author?.area || null,
+        };
+      });
   } catch (error) {
     if (error?.code === 'gold-required') throw error;
     throw new Error(friendlyError(error, 'Could not load comments.'));
@@ -276,6 +318,10 @@ export const toggleLike = async (uid, postId) => {
       const snapshot = await transaction.get(ref);
       if (!snapshot.exists()) throw new Error('This post is no longer available.');
       const data = snapshot.data() || {};
+      if (data.authorUid && data.authorUid !== uid) {
+        const blockSnap = await transaction.get(docRef('blocks', blockDocId(uid, data.authorUid)));
+        if (blockSnap.exists()) throw new Error('You can no longer interact with this member.');
+      }
       const likedBy = Array.isArray(data.likedBy) ? data.likedBy : [];
       const liked = likedBy.includes(uid);
       const next = liked ? likedBy.filter((x) => x !== uid) : [...likedBy, uid];
@@ -300,6 +346,10 @@ export const addComment = async ({ uid, profile, postId, text }) => {
   const commentRef = doc(collection(getDb(), POSTS, postId, 'comments'));
 
   try {
+    const postSnap = await getDoc(postRef);
+    if (!postSnap.exists()) throw new Error('This post is no longer available.');
+    await assertNotBlocked(uid, postSnap.data()?.authorUid);
+
     const batch = writeBatch(getDb());
     batch.set(commentRef, {
       authorUid: uid,

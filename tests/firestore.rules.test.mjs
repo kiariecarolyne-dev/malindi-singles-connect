@@ -26,9 +26,11 @@ const BOB = 'bobuid000002';
 const CAROL = 'caroluid0003';
 const ADMIN = 'adminuid0001';
 const DAVE = 'daveuid00004'; // legacy Gold via profile.gold.isGold
+const FRANK = 'frankuid0006'; // entitlement present but inactive (expired/revoked)
+const PROMO = 'promouid0007'; // disposable member promoted to admin mid-suite
 
-const likeId = `like_${ALICE}_${BOB}`;
-const matchId = `match_${ALICE}_${BOB}`;
+const likeId = `like_${ALICE}__${BOB}`;
+const matchId = `match_${ALICE}__${BOB}`;
 const convId = `conv_${ALICE}_${BOB}`;
 const blockA = `block_${ALICE}_${BOB}`;
 const blockB = `block_${BOB}_${ALICE}`;
@@ -46,21 +48,21 @@ const fail = (label, error) => {
   console.log(`  FAIL ${label}\n       ${String(error?.message || error).split('\n')[0]}`);
 };
 
-const allows = async (label, promise) => {
+const allows = async (label, operation) => {
   try {
-    await assertSucceeds(promise);
+    await assertSucceeds(operation());
     pass(label);
   } catch (error) {
     fail(label, error);
   }
 };
 
-const denies = async (label, promise) => {
+const denies = async (label, operation) => {
   try {
-    await assertFails(promise);
+    await assertFails(operation());
     pass(label);
   } catch (error) {
-    fail(label, new Error(`expected PERMISSION_DENIED but the call succeeded`));
+    fail(label, error);
   }
 };
 
@@ -83,6 +85,8 @@ const seed = () =>
     await db.doc(`users/${CAROL}`).set({ uid: CAROL, email: 'carol@x.co', fullName: 'Carol', role: 'user' });
     await db.doc(`users/${ADMIN}`).set({ uid: ADMIN, email: 'admin@x.co', fullName: 'Admin', role: 'admin' });
     await db.doc(`users/${DAVE}`).set({ uid: DAVE, email: 'dave@x.co', fullName: 'Dave', role: 'user' });
+    await db.doc(`users/${FRANK}`).set({ uid: FRANK, email: 'frank@x.co', fullName: 'Frank', role: 'user' });
+    await db.doc(`users/${PROMO}`).set({ uid: PROMO, email: 'promo@x.co', fullName: 'Promo', role: 'user' });
 
     await db.doc(`profiles/${ALICE}`).set({
       uid: ALICE, fullName: 'Alice', photos: [], bio: 'Hi', gender: 'female',
@@ -104,6 +108,11 @@ const seed = () =>
       uid: DAVE, fullName: 'Dave', photos: [], bio: 'Legacy', gender: 'male',
       interestedIn: ['female'], area: 'malindi-town', verification: { status: 'unverified' },
       gold: { isGold: true, goldActivatedAt: now },
+      lastActiveAt: now, createdAt: now, updatedAt: now,
+    });
+    await db.doc(`profiles/${FRANK}`).set({
+      uid: FRANK, fullName: 'Frank', photos: [], bio: 'Inactive', gender: 'male',
+      interestedIn: ['female'], area: 'malindi-town', verification: { status: 'unverified' },
       lastActiveAt: now, createdAt: now, updatedAt: now,
     });
 
@@ -134,6 +143,10 @@ const seed = () =>
     });
     await db.doc(`goldEntitlements/${ALICE}`).set({
       uid: ALICE, isGold: true, price: 100, currency: 'KES', billing: 'one_time',
+    });
+    // Entitlement doc exists but the membership is no longer active.
+    await db.doc(`goldEntitlements/${FRANK}`).set({
+      uid: FRANK, isGold: false, expiresAt: new Date('2020-01-01T00:00:00Z'),
     });
 
     /* 💛 Gold Circle fixtures — a Gold post (Alice) and a legacy-Gold post
@@ -197,8 +210,8 @@ await allows('discover query (array-contains interestedIn)', () =>
 
 console.log('\nlikes');
 await allows('like create from self (sorted pair id)', () =>
-  asUser(CAROL).doc(`like_${ALICE}_${CAROL}`).set({
-    id: `like_${ALICE}_${CAROL}`, fromUid: CAROL, toUid: ALICE, type: 'like', createdAt: new Date().toISOString(),
+  asUser(CAROL).doc(`likes/like_${ALICE}__${CAROL}`).set({
+    id: `like_${ALICE}__${CAROL}`, fromUid: CAROL, toUid: ALICE, type: 'like', createdAt: new Date().toISOString(),
   }),
 );
 await denies('like create spoofed as someone else', () =>
@@ -385,8 +398,8 @@ await allows('receiver accepts the plan', () =>
   }),
 );
 await denies('sender cannot answer their own plan', () =>
-  asUser(ALICE).doc('meetups/meet2').update({
-    status: 'accepted', respondedAt: new Date().toISOString(), respondedBy: ALICE,
+  asUser(CAROL).doc('meetups/meet2').update({
+    status: 'accepted', respondedAt: new Date().toISOString(), respondedBy: CAROL,
   }),
 );
 await denies('receiver cannot rewrite plan details', () =>
@@ -421,13 +434,13 @@ await denies('owner cannot promote themselves', () =>
   asUser(ALICE).doc(`users/${ALICE}`).update({ role: 'admin' }),
 );
 await allows('admin promotes a member', () =>
-  asUser(ADMIN).doc(`users/${CAROL}`).update({ role: 'admin' }),
+  asUser(ADMIN).doc(`users/${PROMO}`).update({ role: 'admin' }),
 );
 await denies('new account with role admin', () =>
-  asUser(CAROL).doc('users/newadmin0001').set({ uid: 'newadmin0001', email: 'n@x.co', fullName: 'New', role: 'admin' }),
+  asUser('newadmin0001').doc('users/newadmin0001').set({ uid: 'newadmin0001', email: 'n@x.co', fullName: 'New', role: 'admin' }),
 );
 await allows('new account with role user', () =>
-  asUser(CAROL).doc('users/newuser00001').set({ uid: 'newuser00001', email: 'n2@x.co', fullName: 'New', role: 'user' }),
+  asUser('newuser00001').doc('users/newuser00001').set({ uid: 'newuser00001', email: 'n2@x.co', fullName: 'New', role: 'user' }),
 );
 
 console.log('💛 gold circle (Gold-only community)');
@@ -583,6 +596,52 @@ await allows('comment author deletes own comment + counter (batch)', () => {
   batch.update(goldDave.doc('goldCirclePosts/gpost1'), { commentCount: 1 });
   return batch.commit();
 });
+
+// --- participation: every eligible Gold member, matched or not -----------
+console.log('\n💛 gold circle participation (all eligible Gold members)');
+
+// Alice and Dave are NOT matched to each other and are different genders;
+// Gold is the only gate, so Dave can join the discussion on Alice's post.
+await allows('unmatched Gold member of either gender can comment (no match needed)', () => {
+  const batch = goldDave.batch();
+  batch.set(goldDave.doc('goldCirclePosts/gpost1/comments/cpart'), validComment(DAVE));
+  batch.update(goldDave.doc('goldCirclePosts/gpost1'), { commentCount: 2 });
+  return batch.commit();
+});
+await denies('inactive (expired/revoked) membership is denied the feed', () =>
+  asUser(FRANK).collection('goldCirclePosts').orderBy('createdAt', 'desc').limit(12).get(),
+);
+await denies('inactive (expired/revoked) membership cannot post', () =>
+  asUser(FRANK).collection('goldCirclePosts').add(validPost(FRANK)),
+);
+
+// --- blocks: no interaction in either direction --------------------------
+const blockAD = `block_${[ALICE, DAVE].sort().join('__')}`;
+await env.withSecurityRulesDisabled(async (ctx) => {
+  await ctx.firestore().doc(`blocks/${blockAD}`).set({
+    id: blockAD, uid: ALICE, blockedUid: DAVE, createdAt: new Date().toISOString(),
+  });
+});
+
+await denies('blocked member cannot comment on the blocker post', () =>
+  goldDave.doc('goldCirclePosts/gpost1/comments/cblk1').set(validComment(DAVE)),
+);
+await denies('blocked member cannot like the blocker post', () =>
+  goldDave.doc('goldCirclePosts/gpost1').update({ likedBy: [DAVE], likeCount: 1 }),
+);
+await denies('blocker cannot comment on the blocked member post', () =>
+  goldAlice.doc('goldCirclePosts/gpost2/comments/cblk2').set(validComment(ALICE)),
+);
+await denies('blocker cannot like the blocked member post', () =>
+  goldAlice.doc('goldCirclePosts/gpost2').update({ likedBy: [DAVE, ALICE], likeCount: 2 }),
+);
+
+await env.withSecurityRulesDisabled(async (ctx) => {
+  await ctx.firestore().doc(`blocks/${blockAD}`).delete();
+});
+await allows('once the block is lifted the member can interact again', () =>
+  goldDave.doc('goldCirclePosts/gpost1/comments/cok1').set(validComment(DAVE)),
+);
 
 // --- deletions: own post or admin ----------------------------------------
 await denies('gold member cannot delete someone elses post', () =>

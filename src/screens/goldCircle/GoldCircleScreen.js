@@ -581,6 +581,10 @@ const GoldCircleFeed = ({ navigation }) => {
           post={commentsPost}
           onClose={() => setCommentsPost(null)}
           onCountChange={onCommentCountChange}
+          onOpenAuthor={(uid) => {
+            setCommentsPost(null);
+            navigation.navigate('ProfileDetail', { uid });
+          }}
         />
       ) : null}
     </Screen>

@@ -17,11 +17,23 @@ import { Ionicons } from '@expo/vector-icons';
 import Avatar from '../../components/Avatar';
 import EmptyState from '../../components/EmptyState';
 import ErrorState from '../../components/ErrorState';
+import { getAreaLabel } from '../../constants/areas';
 import { LIMITS } from '../../config/env';
 import { useAuth } from '../../context/AuthContext';
 import { goldCircleService } from '../../services';
 import { colors, radius, spacing } from '../../theme';
 import { timeAgo } from '../../utils/time';
+
+const firstName = (name) => (name || '').trim().split(/\s+/)[0] || 'Gold member';
+
+const commentMeta = (comment) =>
+  [
+    comment.authorAge ? `${comment.authorAge}` : null,
+    comment.authorArea ? getAreaLabel(comment.authorArea) : null,
+    timeAgo(comment.createdAt),
+  ]
+    .filter(Boolean)
+    .join(' · ');
 
 /**
  * 💬 Comment thread for one Gold Circle post.
@@ -29,7 +41,7 @@ import { timeAgo } from '../../utils/time';
  * basics as the feed: own comments can be deleted, loading/empty/error
  * states everywhere.
  */
-const GoldCircleComments = ({ post, onClose, onCountChange }) => {
+const GoldCircleComments = ({ post, onClose, onCountChange, onOpenAuthor }) => {
   const { user, profile } = useAuth();
   const [comments, setComments] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -114,6 +126,9 @@ const GoldCircleComments = ({ post, onClose, onCountChange }) => {
     <TouchableOpacity
       style={styles.row}
       activeOpacity={0.8}
+      onPress={() => {
+        if (item.authorUid !== user?.uid) onOpenAuthor?.(item.authorUid);
+      }}
       onLongPress={() => removeComment(item)}
       delayLongPress={350}
     >
@@ -121,9 +136,9 @@ const GoldCircleComments = ({ post, onClose, onCountChange }) => {
       <View style={styles.rowBody}>
         <View style={styles.rowHead}>
           <Text style={styles.rowName} numberOfLines={1}>
-            {item.authorName}
+            {firstName(item.authorName)}
           </Text>
-          <Text style={styles.rowTime}>{timeAgo(item.createdAt)}</Text>
+          <Text style={styles.rowTime}>{commentMeta(item)}</Text>
         </View>
         <Text style={styles.rowText}>{item.text}</Text>
       </View>
@@ -194,7 +209,9 @@ const GoldCircleComments = ({ post, onClose, onCountChange }) => {
               )}
             </TouchableOpacity>
           </View>
-          <Text style={styles.hint}>Long-press your own comment to delete it.</Text>
+          <Text style={styles.hint}>
+            Tap a member to view their profile · long-press your own comment to delete.
+          </Text>
         </KeyboardAvoidingView>
       </View>
     </Modal>

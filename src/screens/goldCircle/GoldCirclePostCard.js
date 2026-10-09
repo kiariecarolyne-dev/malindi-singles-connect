@@ -3,11 +3,25 @@ import { Image, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
 import Avatar from '../../components/Avatar';
+import { getAreaLabel } from '../../constants/areas';
 import { goldCircleService } from '../../services';
 import { colors, radius, shadows, spacing } from '../../theme';
 import { timeAgo } from '../../utils/time';
 
 const categoryOf = (id) => goldCircleService.CATEGORIES.find((c) => c.id === id);
+
+/** Show only a first name in the community feed. */
+const firstName = (name) => (name || '').trim().split(/\s+/)[0] || 'Gold member';
+
+/** "29 · Malindi · 2h" — each part only when the profile provides it. */
+const authorMeta = (post) =>
+  [
+    post.authorAge ? `${post.authorAge}` : null,
+    post.authorArea ? getAreaLabel(post.authorArea) : null,
+    timeAgo(post.createdAt),
+  ]
+    .filter(Boolean)
+    .join(' · ');
 
 /**
  * 💛 One Gold Circle post: author + Gold indicator, category badge,
@@ -37,11 +51,11 @@ const GoldCirclePostCard = ({
         <View style={styles.headerBody}>
           <View style={styles.nameRow}>
             <Text style={styles.name} numberOfLines={1}>
-              {post.authorName}
+              {firstName(post.authorName)}
             </Text>
             <Text style={styles.goldMark}>✦ Gold</Text>
           </View>
-          <Text style={styles.time}>{timeAgo(post.createdAt)}</Text>
+          <Text style={styles.time}>{authorMeta(post)}</Text>
         </View>
       </TouchableOpacity>
 

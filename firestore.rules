@@ -21,9 +21,25 @@ service cloud.firestore {
         get(/databases/$(database)/documents/users/$(uid())).data.role == 'admin';
     }
 
-    /** Deterministic ids the app builds: `like_{min}_{max}`, `match_{min}_{max}`. */
+    /**
+     * Deterministic pair ids the app builds via helpers.pairKey:
+     * `like_{min}__{max}`, `match_{min}__{max}` (double underscore, both
+     * uids sorted). Keep this in lockstep with `likeDocId`/`matchDocId` or
+     * cross-user notification proofs silently fail.
+     */
     function pairId(prefix, a, b) {
-      return a < b ? prefix + '_' + a + '_' + b : prefix + '_' + b + '_' + a;
+      return a < b ? prefix + '_' + a + '__' + b : prefix + '_' + b + '__' + a;
+    }
+
+    /**
+     * Blocks are stored order-independently as `block_{min}__{max}` (double
+     * underscore, matching `blockDocId` in the app). A single document covers
+     * both directions, so one lookup proves "these two must not interact".
+     */
+    function blockedBetween(a, b) {
+      return a != b &&
+        exists(/databases/$(database)/documents/blocks/
+          $(a < b ? 'block_' + a + '__' + b : 'block_' + b + '__' + a));
     }
 
     /** Fields no client may ever write on a profile. */
@@ -334,8 +350,10 @@ service cloud.firestore {
 
       allow update: if isGoldMember() && (
         // 👍 Like / unlike: only the acting uid may enter or leave the
-        // array, and likeCount always mirrors likedBy.size().
+        // array, and likeCount always mirrors likedBy.size(). A block in
+        // either direction stops the like entirely.
         (
+          !blockedBetween(uid(), resource.data.authorUid) &&
           request.resource.data.diff(resource.data).affectedKeys()
             .hasOnly(['likedBy', 'likeCount']) &&
           request.resource.data.likeCount == request.resource.data.likedBy.size() &&
@@ -393,7 +411,11 @@ service cloud.firestore {
           request.resource.data.text.size() > 0 &&
           request.resource.data.text.size() <= 1000 &&
           request.resource.data.createdAt == request.time &&
-          exists(/databases/$(database)/documents/goldCirclePosts/$(postId));
+          exists(/databases/$(database)/documents/goldCirclePosts/$(postId)) &&
+          // Respect blocks both ways: a blocked member cannot comment on the
+          // blocker's post, and the blocker cannot comment on theirs.
+          !blockedBetween(uid(),
+            get(/databases/$(database)/documents/goldCirclePosts/$(postId)).data.authorUid);
 
         // Comments are immutable — edits would rewrite the conversation.
         allow update: if false;

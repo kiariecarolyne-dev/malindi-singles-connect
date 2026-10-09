@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Platform, StyleSheet } from 'react-native';
+import { StyleSheet } from 'react-native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -64,7 +64,7 @@ const MainTabs = () => {
         tabBarStyle: [
           styles.tabBar,
           {
-            height: 60 + (insets.bottom || Platform.OS === 'android' ? insets.bottom : 0),
+            height: 60 + insets.bottom,
             paddingBottom: Math.max(insets.bottom, 8),
           },
         ],

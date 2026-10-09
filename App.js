@@ -1,6 +1,7 @@
 import React from 'react';
 import { StatusBar } from 'expo-status-bar';
 import { NavigationContainer, DefaultTheme } from '@react-navigation/native';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { AuthProvider } from './src/context/AuthContext';
 import RootNavigator from './src/navigation/RootNavigator';
@@ -22,11 +23,13 @@ const navTheme = {
 
 export default function App() {
   return (
-    <AuthProvider>
-      <NavigationContainer theme={navTheme}>
-        <StatusBar style="light" />
-        <RootNavigator />
-      </NavigationContainer>
-    </AuthProvider>
+    <SafeAreaProvider>
+      <AuthProvider>
+        <NavigationContainer theme={navTheme}>
+          <StatusBar style="light" />
+          <RootNavigator />
+        </NavigationContainer>
+      </AuthProvider>
+    </SafeAreaProvider>
   );
 }

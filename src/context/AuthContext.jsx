@@ -14,7 +14,6 @@ import React, {
 } from 'react';
 
 import { authService, profileService } from '../services';
-import { runAuthMeTest } from '../utils/devAuthMeTest';
 
 const AuthContext = createContext(null);
 
@@ -25,7 +24,6 @@ export const AuthProvider = ({ children }) => {
   const [profileLoading, setProfileLoading] = useState(false);
   const [profileLoaded, setProfileLoaded] = useState(false);
   const [profileVersion, setProfileVersion] = useState(0);
-  const authMeTestRan = useRef(false);
 
   const loadProfile = useCallback(async (uid) => {
     if (!uid) {
@@ -51,11 +49,6 @@ export const AuthProvider = ({ children }) => {
 
   const applyAuthUser = useCallback(
     (nextUser) => {
-      // TEMP dev-only diagnostic — safe to remove.
-      if (nextUser && !authMeTestRan.current) {
-        authMeTestRan.current = true;
-        runAuthMeTest();
-      }
       setUser(nextUser);
       return loadProfile(nextUser?.uid || null);
     },

@@ -19,6 +19,10 @@ import { colors, gradients, radius, shadows, spacing } from '../theme';
  */
 const ProfileCard = ({ profile, distanceKm, compatibility, showDistance = true }) => {
   const [loaded, setLoaded] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const photoUri = profile.photos?.[0];
+  const showPhoto = Boolean(photoUri) && loaded && !failed;
+  const initials = (profile.fullName || '?').trim().split(/\s+/).slice(0, 2).map((w) => w[0]).join('').toUpperCase() || '?';
   const age = profileAge(profile);
   const intention = getIntention(profile.datingIntention);
   const interests = getInterestsByIds(profile.interests).slice(0, 5);
@@ -27,10 +31,16 @@ const ProfileCard = ({ profile, distanceKm, compatibility, showDistance = true }
 
   return (
     <View style={styles.card}>
+      {!showPhoto ? (
+        <View style={styles.avatar}>
+          <Text style={styles.avatarText}>{initials}</Text>
+        </View>
+      ) : null}
       <Image
-        source={{ uri: profile.photos?.[0] }}
-        style={[styles.photo, { opacity: loaded ? 1 : 0 }]}
+        source={photoUri ? { uri: photoUri } : undefined}
+        style={[styles.photo, { opacity: showPhoto ? 1 : 0 }]}
         onLoad={() => setLoaded(true)}
+        onError={() => setFailed(true)}
         fadeDuration={250}
       />
       <LinearGradient colors={gradients.card} style={styles.overlay} />
@@ -104,6 +114,15 @@ const styles = StyleSheet.create({
     ...shadows.card,
   },
   photo: { ...StyleSheet.absoluteFillObject, width: '100%', height: '100%' },
+  avatar: {
+    ...StyleSheet.absoluteFillObject,
+    width: '100%',
+    height: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.surfaceHigh,
+  },
+  avatarText: { color: colors.text, fontSize: 56, fontWeight: '900', opacity: 0.9 },
   overlay: { ...StyleSheet.absoluteFillObject, justifyContent: 'flex-end' },
   topRow: {
     position: 'absolute',

@@ -5,7 +5,7 @@
  * Keep this file free of premium/visibility rules: callers pass the exact
  * filters they need so the locked-liker privacy rules stay in premiumService.
  */
-import { documentId, getDoc, getDocs, limit, orderBy, query, startAfter, Timestamp, where } from 'firebase/firestore';
+import { getDoc, getDocs, limit, orderBy, query, startAfter, Timestamp, where } from 'firebase/firestore';
 
 import { docsToModels, docToModel, col, docRef } from './helpers';
 
@@ -76,9 +76,12 @@ export const collectCandidates = async ({ interestedInGender, filter, need = 12,
   let scanned = 0;
 
   while (results.length < need && scanned < maxDocs) {
+    // Firestore implicitly orders by document id when no orderBy is given, so
+    // pagination via startAfter(cursor) still walks the deck in a stable order.
+    // No explicit orderBy(documentId()) here: combined with `array-contains`
+    // it can require a composite index and trips the emulator.
     const constraints = [
       where('interestedIn', 'array-contains', interestedInGender),
-      orderBy(documentId()),
       limit(CANDIDATE_BATCH),
     ];
     const q = cursor

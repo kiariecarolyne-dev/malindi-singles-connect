@@ -14,6 +14,17 @@ export const calculateAge = (dateOfBirth) => {
   return age;
 };
 
+/**
+ * Age to display for a profile. Public profiles carry only a derived `age`
+ * (the full date of birth lives in the owner-only private document), but a
+ * not-yet-migrated profile may still expose `dateOfBirth`, so fall back to it.
+ */
+export const profileAge = (profile) => {
+  if (!profile) return 0;
+  if (Number.isInteger(profile.age) && profile.age > 0) return profile.age;
+  return calculateAge(profile.dateOfBirth);
+};
+
 /** The 18+ gate — registration must fail when this is false. */
 export const isAdult = (dateOfBirth) => calculateAge(dateOfBirth) >= APP.minAge;
 

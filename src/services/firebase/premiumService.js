@@ -17,7 +17,7 @@
 import { getDoc, getDocs, limit, query, where } from 'firebase/firestore';
 
 import { FREE_VISIBLE_LIKES, GOLD } from '../../constants/plans';
-import { calculateAge } from '../../utils/age';
+import { profileAge } from '../../utils/age';
 import { compatibilityScore } from '../../utils/compatibility';
 import { startGoldPayment, getPaymentStatus } from '../backend/paymentService';
 import { getFirebaseAuth } from './firebaseConfig';
@@ -29,9 +29,23 @@ import {
   fetchProfileDoc,
 } from './deck';
 
+/** Timestamp | ISO string | number -> epoch ms, or null when absent/invalid. */
+const expiryMs = (value) => {
+  if (value === null || value === undefined) return null;
+  if (typeof value.toDate === 'function') return value.toDate().getTime();
+  if (value instanceof Date) return value.getTime();
+  if (typeof value === 'number') return value;
+  const parsed = new Date(value).getTime();
+  return Number.isNaN(parsed) ? null : parsed;
+};
+
 /** Normalised entitlement document: `goldEntitlements/{uid}`. */
 const normaliseEntitlement = (row) => {
   if (!row || !row.isGold) return { isGold: false };
+  // Server rules re-check this; the client mirrors it so the UI never shows
+  // Gold (and never opens Gold-only screens) for an expired entitlement.
+  const expires = expiryMs(row.expiresAt);
+  if (expires !== null && expires <= Date.now()) return { isGold: false };
   return {
     isGold: true,
     goldActivatedAt: row.goldActivatedAt || null,
@@ -158,7 +172,7 @@ export const getLikesYou = async (viewerUid) => {
   const viewer = await fetchProfileDoc(viewerUid);
 
   return rows.map((row) => {
-    const age = calculateAge(row.profile.dateOfBirth);
+    const age = profileAge(row.profile);
     const base = {
       uid: row.profile.uid,
       fullName: row.profile.fullName,

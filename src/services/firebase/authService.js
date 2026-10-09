@@ -13,10 +13,10 @@ import {
   signInWithEmailAndPassword as firebaseSignIn,
   signOut as firebaseSignOut,
 } from 'firebase/auth';
-import { deleteDoc, getDoc, onSnapshot, serverTimestamp, setDoc } from 'firebase/firestore';
+import { deleteDoc, doc, getDoc, onSnapshot, serverTimestamp, writeBatch } from 'firebase/firestore';
 
 import { calculateAge } from '../../utils/age';
-import { assertConfigured, getFirebaseAuth } from './firebaseConfig';
+import { assertConfigured, getDb, getFirebaseAuth } from './firebaseConfig';
 import { docRef, docToModel, friendlyError } from './helpers';
 import { ensureWelcome } from './notificationService';
 import { touchActivity } from './profileService';
@@ -149,30 +149,53 @@ export const restoreSession = async () => {
   return currentUser;
 };
 
-/** Writes `users/{uid}` + a bare profile so onboarding can finish it. */
+/**
+ * Writes `users/{uid}` + the owner-only private profile data (full date of
+ * birth) + the public profile (derived age only) in ONE commit, so the DB never
+ * contains a public profile that leaks a date of birth.
+ */
 const createAccountDocuments = async (authUser, { fullName, seedProfile = {} }) => {
+  const uid = authUser.uid;
+  const name = fullName || authUser.email || 'Member';
+  const { dateOfBirth, ...publicSeed } = seedProfile || {};
+  const age = dateOfBirth ? calculateAge(dateOfBirth) : null;
+
   let writeStep = 'users';
   try {
-    await setDoc(docRef('users', authUser.uid), {
-      uid: authUser.uid,
+    const batch = writeBatch(getDb());
+    batch.set(docRef('users', uid), {
+      uid,
       email: (authUser.email || '').toLowerCase(),
-      fullName: fullName || authUser.email || 'Member',
+      fullName: name,
       role: 'user',
       createdAt: serverTimestamp(),
     });
+
+    writeStep = 'private profile';
+    if (dateOfBirth) {
+      batch.set(doc(getDb(), 'profiles', uid, 'private', 'data'), {
+        uid,
+        dateOfBirth: new Date(dateOfBirth),
+        updatedAt: serverTimestamp(),
+      });
+    }
+
     writeStep = 'profiles';
-    await setDoc(docRef('profiles', authUser.uid), {
-      uid: authUser.uid,
-      fullName: fullName || authUser.email || 'Member',
+    batch.set(docRef('profiles', uid), {
+      uid,
+      fullName: name,
       photos: [],
       bio: '',
       interests: [],
       verification: { status: 'unverified', phone: false, email: false, selfie: false },
+      ...(age ? { age } : {}),
+      ...compact(publicSeed),
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
       lastActiveAt: serverTimestamp(),
-      ...compact(seedProfile),
     });
+
+    await batch.commit();
   } catch (error) {
     if (__DEV__) {
       console.warn(

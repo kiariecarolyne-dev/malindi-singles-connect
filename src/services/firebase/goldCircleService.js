@@ -40,7 +40,7 @@ import {
 } from 'firebase/firestore';
 
 import { LIMITS } from '../../config/env';
-import { calculateAge } from '../../utils/age';
+import { profileAge } from '../../utils/age';
 import { uploadProfilePhotoViaBackend } from '../backend/photoService';
 import { deleteProfilePhoto } from '../supabase/storage';
 import { getDb } from './firebaseConfig';
@@ -160,7 +160,7 @@ const hydratePage = async (rows, viewerUid) => {
     if (blocked.has(row.authorUid)) return;
     const author = byUid.get(row.authorUid);
     if (author?.suspended) return;
-    const age = author?.dateOfBirth ? calculateAge(author.dateOfBirth) : 0;
+    const age = author ? profileAge(author) : 0;
     visible.push({
       ...row,
       authorName: author?.fullName || row.authorName,
@@ -216,7 +216,7 @@ export const getComments = async (viewerUid, postId) => {
       .filter((row) => !byUid.get(row.authorUid)?.suspended)
       .map((row) => {
         const author = byUid.get(row.authorUid);
-        const age = author?.dateOfBirth ? calculateAge(author.dateOfBirth) : 0;
+        const age = author ? profileAge(author) : 0;
         return {
           ...row,
           authorName: author?.fullName || row.authorName,

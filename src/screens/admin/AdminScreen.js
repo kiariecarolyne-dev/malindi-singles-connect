@@ -1,5 +1,5 @@
 import React, { useCallback, useState } from 'react';
-import { Alert, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Alert, Image, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 
@@ -12,6 +12,7 @@ import Skeleton from '../../components/Skeleton';
 import { REPORT_REASONS } from '../../constants/reportReasons';
 import { useAuth } from '../../context/AuthContext';
 import { adminService, notificationService, profileService, reportService } from '../../services';
+import { getVerificationSelfieUrl } from '../../services/backend/verificationService';
 import { colors, radius, spacing } from '../../theme';
 import { timeAgo } from '../../utils/time';
 
@@ -45,9 +46,21 @@ const AdminScreen = () => {
           reporter: await profileService.getProfile(rep.fromUid),
         })),
       );
+      // Selfies live in a private bucket: fetch a short-lived signed URL per
+      // pending member. The backend re-checks the reviewer role on every call.
+      const pendingWithSelfies = await Promise.all(
+        v.map(async (p) => {
+          try {
+            const { url } = await getVerificationSelfieUrl(p.uid);
+            return { ...p, selfieUrl: url };
+          } catch {
+            return p;
+          }
+        }),
+      );
       setStats(s);
       setReports(withNames);
-      setPending(v);
+      setPending(pendingWithSelfies);
       setError(null);
     } catch (e) {
       setError(e.message || 'Could not load moderation data.');
@@ -250,12 +263,22 @@ const AdminScreen = () => {
               pending.map((p) => (
                 <View key={p.uid} style={styles.card}>
                   <View style={styles.personRow}>
-                    <Avatar uri={p.verificationSelfie || p.photos?.[0]} name={p.fullName} size={54} />
+                    <Avatar uri={p.photos?.[0]} name={p.fullName} size={54} />
                     <View style={{ flex: 1 }}>
                       <Text style={styles.personName}>{p.fullName}</Text>
                       <Text style={styles.personSub}>selfie submitted · {timeAgo(p.createdAt)}</Text>
                     </View>
                   </View>
+                  {p.selfieUrl ? (
+                    <Image source={{ uri: p.selfieUrl }} style={styles.selfie} resizeMode="cover" />
+                  ) : (
+                    <View style={styles.selfieEmpty}>
+                      <Ionicons name="image-outline" size={22} color={colors.textMuted} />
+                      <Text style={styles.selfieEmptyText}>
+                        {p.verificationSelfiePath ? 'Selfie could not be loaded' : 'No selfie on file'}
+                      </Text>
+                    </View>
+                  )}
                   <View style={styles.actions}>
                     <TouchableOpacity
                       style={[styles.actionBtn, styles.approveBtn]}
@@ -333,6 +356,27 @@ const styles = StyleSheet.create({
   personRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, marginTop: spacing.md },
   personName: { color: colors.text, fontSize: 15, fontWeight: '700' },
   personSub: { color: colors.textMuted, fontSize: 12, marginTop: 1, textTransform: 'capitalize' },
+
+  selfie: {
+    width: '100%',
+    height: 220,
+    borderRadius: radius.lg,
+    marginTop: spacing.md,
+    backgroundColor: colors.backgroundAlt,
+  },
+  selfieEmpty: {
+    width: '100%',
+    height: 96,
+    borderRadius: radius.lg,
+    marginTop: spacing.md,
+    backgroundColor: colors.backgroundAlt,
+    borderWidth: 1,
+    borderColor: colors.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+  },
+  selfieEmptyText: { color: colors.textMuted, fontSize: 12 },
   details: {
     color: colors.textSecondary,
     fontSize: 13,

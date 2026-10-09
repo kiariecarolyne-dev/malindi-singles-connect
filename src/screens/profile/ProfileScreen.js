@@ -15,7 +15,7 @@ import { getIntention } from '../../constants/datingIntentions';
 import { getInterestsByIds } from '../../constants/interests';
 import { useAuth } from '../../context/AuthContext';
 import { matchService, premiumService, profileService } from '../../services';
-import { calculateAge } from '../../utils/age';
+import { profileAge } from '../../utils/age';
 import { isActiveRecently } from '../../utils/time';
 import { colors, radius, spacing } from '../../theme';
 
@@ -67,7 +67,7 @@ const ProfileScreen = ({ navigation }) => {
 
   if (!profile) return <Screen edges={['top']} />;
 
-  const age = calculateAge(profile.dateOfBirth);
+  const age = profileAge(profile);
   const intention = getIntention(profile.datingIntention);
   const interests = getInterestsByIds(profile.interests);
   const active = isActiveRecently(profile.lastActiveAt);

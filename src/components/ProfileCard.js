@@ -8,7 +8,7 @@ import { VerifiedBadge } from './Badge';
 import { getAreaLabel } from '../constants/areas';
 import { getIntention } from '../constants/datingIntentions';
 import { getInterestsByIds } from '../constants/interests';
-import { calculateAge } from '../utils/age';
+import { profileAge } from '../utils/age';
 import { shortDistance } from '../utils/distance';
 import { isActiveRecently } from '../utils/time';
 import { colors, gradients, radius, shadows, spacing } from '../theme';
@@ -19,7 +19,7 @@ import { colors, gradients, radius, shadows, spacing } from '../theme';
  */
 const ProfileCard = ({ profile, distanceKm, compatibility, showDistance = true }) => {
   const [loaded, setLoaded] = useState(false);
-  const age = calculateAge(profile.dateOfBirth);
+  const age = profileAge(profile);
   const intention = getIntention(profile.datingIntention);
   const interests = getInterestsByIds(profile.interests).slice(0, 5);
   const active = isActiveRecently(profile.lastActiveAt);

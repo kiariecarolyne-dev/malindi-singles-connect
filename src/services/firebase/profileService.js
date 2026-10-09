@@ -9,6 +9,8 @@
  */
 import {
   deleteDoc,
+  deleteField,
+  doc,
   getDoc,
   getDocs,
   limit as fsLimit,
@@ -17,11 +19,13 @@ import {
   setDoc,
   updateDoc,
   where,
+  writeBatch,
 } from 'firebase/firestore';
 
 import { LIMITS } from '../../config/env';
 import { isKnownArea, isSameAreaGroup } from '../../constants/areas';
-import { getFirebaseAuth } from './firebaseConfig';
+import { calculateAge, profileAge } from '../../utils/age';
+import { getDb, getFirebaseAuth } from './firebaseConfig';
 import { deleteProfilePhoto, photoPathFromValue } from '../supabase/storage';
 import { uploadProfilePhotoViaBackend } from '../backend/photoService';
 import {
@@ -32,6 +36,7 @@ import {
   docsToModels,
   friendlyError,
   nowIso,
+  toIso,
 } from './helpers';
 import {
   collectCandidates,
@@ -101,6 +106,64 @@ const persistPhotos = async (uid, patch, previousPhotos = []) => {
  * Reads                                                               *
  * ------------------------------------------------------------------ */
 
+/**
+ * Owner-only profile data (full date of birth + verification selfie) lives in
+ * `profiles/{uid}/private/data`. Rules expose it to the owner and admins only;
+ * the public profile keeps just a derived, non-identifying `age`.
+ */
+const privateRef = (uid) => doc(getDb(), 'profiles', uid, 'private', 'data');
+
+const readPrivateData = async (uid) => {
+  try {
+    const snapshot = await getDoc(privateRef(uid));
+    return snapshot.exists() ? docToModel(snapshot) : null;
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * Fold a legacy public `dateOfBirth` into the private doc so the full DOB
+ * stops being world-readable. Best-effort: a failure never blocks loading.
+ */
+const migratePrivateFields = async (profile) => {
+  const uid = profile.uid;
+  if (!uid) return;
+  const existing = await readPrivateData(uid);
+  const rawDob = profile.dateOfBirth || (existing ? toIso(existing.dateOfBirth) : null);
+  if (!rawDob) return;
+
+  const age = calculateAge(rawDob);
+  if (!age) return;
+
+  const dobIso = new Date(rawDob).toISOString();
+  const privateMissing = !existing || !existing.dateOfBirth ||
+    toIso(existing.dateOfBirth) !== dobIso;
+  const publicDirty = profile.dateOfBirth != null;
+
+  if (privateMissing || publicDirty) {
+    try {
+      const batch = writeBatch(getDb());
+      if (privateMissing) {
+        batch.set(
+          privateRef(uid),
+          { uid, dateOfBirth: new Date(rawDob), updatedAt: serverTimestamp() },
+          { merge: true },
+        );
+      }
+      if (publicDirty) {
+        batch.update(docRef('profiles', uid), { age, dateOfBirth: deleteField() });
+      }
+      await batch.commit();
+    } catch {
+      // Best effort only — discovery still works from the legacy field.
+    }
+  }
+
+  profile.age = age;
+  if (publicDirty) delete profile.dateOfBirth;
+};
+
 /** Profile by uid. Own profile also carries the (read-only) Gold entitlement. */
 export const getProfile = async (uid) => {
   if (!uid) return null;
@@ -108,10 +171,27 @@ export const getProfile = async (uid) => {
     const snapshot = await getDoc(docRef('profiles', uid));
     if (!snapshot.exists()) return null;
     const profile = docToModel(snapshot);
-    if (profile.uid === getFirebaseAuth().currentUser?.uid) {
+    const isOwner = profile.uid === getFirebaseAuth().currentUser?.uid;
+
+    if (isOwner) {
+      await migratePrivateFields(profile);
+      const privateData = await readPrivateData(uid);
+      if (privateData) {
+        const dob = toIso(privateData.dateOfBirth);
+        if (dob) profile.dateOfBirth = dob;
+        // Owner-only: the private storage path of the verification selfie. The
+        // image itself never reaches Firestore; the backend signs short-lived
+        // URLs on demand. It is never copied onto the public profile.
+        if (privateData.verificationSelfiePath) {
+          profile.verificationSelfiePath = privateData.verificationSelfiePath;
+        }
+      }
       const entitlement = await premiumService.getEntitlement(uid);
       profile.gold = entitlement.isGold ? entitlement : null;
       profile.plan = entitlement.isGold ? 'gold' : profile.plan || 'free';
+    } else if (profile.dateOfBirth && !profile.age) {
+      // Legacy public profile viewed by someone else: derive in memory only.
+      profile.age = profileAge(profile);
     }
     return profile;
   } catch (error) {
@@ -124,9 +204,23 @@ export const getMyProfile = async () => getProfile(getFirebaseAuth().currentUser
 export const createProfile = async (uid, data) => {
   const existing = await getProfile(uid);
   if (existing) return updateProfile(uid, data);
+
+  const privateData = await readPrivateData(uid);
+  const rawDob = data?.dateOfBirth || (privateData ? toIso(privateData.dateOfBirth) : null);
+  if (!rawDob) {
+    throw new Error('A date of birth is required to create a profile.');
+  }
+  const age = calculateAge(rawDob);
   try {
+    await setDoc(
+      privateRef(uid),
+      { uid, dateOfBirth: new Date(rawDob), updatedAt: serverTimestamp() },
+      { merge: true },
+    );
+    const { dateOfBirth, ...rest } = data || {};
     await setDoc(docRef('profiles', uid), {
-      ...strip(data),
+      ...strip(rest),
+      age,
       uid,
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
@@ -137,8 +231,21 @@ export const createProfile = async (uid, data) => {
   return getProfile(uid);
 };
 
-/** Keys the client may never write on a profile document. */
-const FORBIDDEN_PROFILE_KEYS = ['uid', 'gold', 'premium', 'plan', 'role'];
+/** Keys the client may never write on a public profile document. */
+const FORBIDDEN_PROFILE_KEYS = [
+  'uid',
+  'gold',
+  'premium',
+  'plan',
+  'role',
+  'dateOfBirth',
+  'verificationSelfie',
+  'verificationSelfiePath',
+  'verificationSelfieBucket',
+  'verificationSelfieMime',
+  'verificationSelfieBytes',
+  'verificationSelfieUpdatedAt',
+];
 
 const strip = (patch) => {
   const out = {};
@@ -152,13 +259,31 @@ const strip = (patch) => {
 
 export const updateProfile = async (uid, patch) => {
   const existing = await getProfile(uid);
-  const withPhotos = await persistPhotos(uid, patch, existing?.photos || []);
+  const { dateOfBirth, ...publicPatch } = patch || {};
+  const withPhotos = await persistPhotos(uid, publicPatch, existing?.photos || []);
+
+  // The public profile only stores the derived age; keep it in sync with the
+  // owner-only date of birth (rules reject an inconsistent derived age). Only
+  // the owner refreshes it — admins change verification/suspension, not age.
+  const merged = { ...strip(withPhotos), uid, updatedAt: serverTimestamp() };
+  if (uid === getFirebaseAuth().currentUser?.uid) {
+    const privateData = await readPrivateData(uid);
+    if (privateData?.dateOfBirth) {
+      merged.age = calculateAge(toIso(privateData.dateOfBirth));
+    }
+  }
+
   try {
-    await setDoc(
-      docRef('profiles', uid),
-      { ...strip(withPhotos), uid, updatedAt: serverTimestamp() },
-      { merge: true },
-    );
+    await setDoc(docRef('profiles', uid), merged, { merge: true });
+    // The verification selfie path is written by the trusted backend only; the
+    // owner's client is limited to the (non-sensitive) date of birth here.
+    if (dateOfBirth !== undefined) {
+      await setDoc(
+        privateRef(uid),
+        { uid, dateOfBirth: new Date(dateOfBirth), updatedAt: serverTimestamp() },
+        { merge: true },
+      );
+    }
   } catch (error) {
     throw new Error(friendlyError(error, 'Could not save your profile.'));
   }
@@ -173,14 +298,6 @@ export const touchActivity = async (uid) => {
   } catch {
     // Profile may not exist yet — activity is optional.
   }
-};
-
-const ageOf = (profile) => {
-  const d = new Date(profile.dateOfBirth);
-  let age = new Date().getFullYear() - d.getFullYear();
-  const month = new Date().getMonth() - d.getMonth();
-  if (month < 0 || (month === 0 && new Date().getDate() < d.getDate())) age -= 1;
-  return age;
 };
 
 const isVisible = (profile, me) => {
@@ -217,8 +334,8 @@ export const getDiscoverProfiles = async (myUid, { page = 0 } = {}) => {
       !profile.suspended &&
       (me.interestedIn || []).includes(profile.gender) &&
       (profile.interestedIn || []).includes(me.gender) &&
-      ageOf(profile) >= (me.preferences?.minAge || 18) &&
-      ageOf(profile) <= (me.preferences?.maxAge || 99) &&
+      profileAge(profile) >= (me.preferences?.minAge || 18) &&
+      profileAge(profile) <= (me.preferences?.maxAge || 99) &&
       isVisible(profile, me),
   });
 
@@ -369,14 +486,20 @@ export const viewerHasBlockedMe = async (myUid) => {
  * Admin (rules require users/{uid}.role == 'admin')                   *
  * ------------------------------------------------------------------ */
 
-/** Admin: profiles waiting for selfie review. */
+/** Admin: profiles waiting for selfie review (selfie comes from the private doc). */
 export const getPendingVerifications = async () => {
   const snapshot = await getDocs(
     query(col('profiles'), where('verification.status', '==', 'pending'), fsLimit(200)),
   );
-  return docsToModels(snapshot).sort(
-    (a, b) => new Date(a.createdAt || 0) - new Date(b.createdAt || 0),
+  const rows = await Promise.all(
+    docsToModels(snapshot).map(async (profile) => {
+      const privateData = await readPrivateData(profile.uid);
+      return privateData?.verificationSelfiePath
+        ? { ...profile, verificationSelfiePath: privateData.verificationSelfiePath }
+        : profile;
+    }),
   );
+  return rows.sort((a, b) => new Date(a.createdAt || 0) - new Date(b.createdAt || 0));
 };
 
 /** Admin: suspend or restore an account. */

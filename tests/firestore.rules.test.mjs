@@ -17,7 +17,7 @@ import {
   assertSucceeds,
   initializeTestEnvironment,
 } from '@firebase/rules-unit-testing';
-import { serverTimestamp } from 'firebase/firestore';
+import { deleteField, serverTimestamp } from 'firebase/firestore';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -28,6 +28,12 @@ const ADMIN = 'adminuid0001';
 const DAVE = 'daveuid00004'; // legacy Gold via profile.gold.isGold
 const FRANK = 'frankuid0006'; // entitlement present but inactive (expired/revoked)
 const PROMO = 'promouid0007'; // disposable member promoted to admin mid-suite
+const GRACE = 'graceuid0008'; // isGold true but entitlement already expired
+const HOPE = 'hopeuid0009'; // isGold true with a future expiry (still active)
+const NEW = 'newuid0010'; // fresh member used for private-profile create tests
+const NEW2 = 'newuid0011'; // fresh member whose derived age must be rejected
+const NEW3 = 'newuid0012'; // fresh member that tries to publish a date of birth
+const LEGACY = 'legacyuid013'; // legacy profile still carrying a public dateOfBirth
 
 const likeId = `like_${ALICE}__${BOB}`;
 const matchId = `match_${ALICE}__${BOB}`;
@@ -87,6 +93,8 @@ const seed = () =>
     await db.doc(`users/${DAVE}`).set({ uid: DAVE, email: 'dave@x.co', fullName: 'Dave', role: 'user' });
     await db.doc(`users/${FRANK}`).set({ uid: FRANK, email: 'frank@x.co', fullName: 'Frank', role: 'user' });
     await db.doc(`users/${PROMO}`).set({ uid: PROMO, email: 'promo@x.co', fullName: 'Promo', role: 'user' });
+    await db.doc(`users/${GRACE}`).set({ uid: GRACE, email: 'grace@x.co', fullName: 'Grace', role: 'user' });
+    await db.doc(`users/${HOPE}`).set({ uid: HOPE, email: 'hope@x.co', fullName: 'Hope', role: 'user' });
 
     await db.doc(`profiles/${ALICE}`).set({
       uid: ALICE, fullName: 'Alice', photos: [], bio: 'Hi', gender: 'female',
@@ -114,6 +122,53 @@ const seed = () =>
       uid: FRANK, fullName: 'Frank', photos: [], bio: 'Inactive', gender: 'male',
       interestedIn: ['female'], area: 'malindi-town', verification: { status: 'unverified' },
       lastActiveAt: now, createdAt: now, updatedAt: now,
+    });
+    await db.doc(`profiles/${GRACE}`).set({
+      uid: GRACE, fullName: 'Grace', photos: [], bio: 'Expired', gender: 'female',
+      interestedIn: ['male'], area: 'malindi-town', verification: { status: 'unverified' },
+      lastActiveAt: now, createdAt: now, updatedAt: now,
+    });
+    await db.doc(`profiles/${HOPE}`).set({
+      uid: HOPE, fullName: 'Hope', photos: [], bio: 'Active timed Gold', gender: 'female',
+      interestedIn: ['male'], area: 'malindi-town', verification: { status: 'unverified' },
+      lastActiveAt: now, createdAt: now, updatedAt: now,
+    });
+
+    /* Owner-only profile data: the full date of birth (+ verification selfie)
+       lives here, never on the public profile document. */
+    await db.doc(`profiles/${ALICE}/private/data`).set({
+      uid: ALICE, dateOfBirth: new Date('1990-01-01T00:00:00Z'), updatedAt: now,
+    });
+    await db.doc(`profiles/${NEW}/private/data`).set({
+      uid: NEW, dateOfBirth: new Date('1990-01-01T00:00:00Z'), updatedAt: now,
+    });
+    await db.doc(`profiles/${NEW2}/private/data`).set({
+      uid: NEW2, dateOfBirth: new Date('1990-01-01T00:00:00Z'), updatedAt: now,
+    });
+    // Legacy profile: date of birth still on the PUBLIC doc, no derived age.
+    await db.doc(`profiles/${LEGACY}`).set({
+      uid: LEGACY, fullName: 'Legacy', photos: [], bio: 'Old', gender: 'male',
+      interestedIn: ['female'], area: 'malindi-town', dateOfBirth: '1990-01-01',
+      verification: { status: 'unverified' }, lastActiveAt: now, createdAt: now, updatedAt: now,
+    });
+    await db.doc(`profiles/${LEGACY}/private/data`).set({
+      uid: LEGACY, dateOfBirth: new Date('1990-01-01T00:00:00Z'), updatedAt: now,
+    });
+
+    /* A second matched pair (Dave <-> Grace) with pending invites, used to
+       prove that a block freezes meetup responses in both directions. */
+    const dgPair = [DAVE, GRACE].sort().join('__');
+    await db.doc(`matches/match_${dgPair}`).set({
+      id: `match_${dgPair}`, conversationId: `conv_${dgPair}`, uids: [DAVE, GRACE].sort(),
+      status: 'new', blocked: false, createdAt: now,
+    });
+    await db.doc('meetups/meet_ok').set({
+      fromUid: DAVE, toUid: GRACE, matchId: `match_${dgPair}`, activityId: 'coffee',
+      placeId: 'square', timeLabel: '5:00 PM', status: 'pending', date: '2026-10-07', createdAt: now,
+    });
+    await db.doc('meetups/meet_block').set({
+      fromUid: DAVE, toUid: GRACE, matchId: `match_${dgPair}`, activityId: 'walk',
+      placeId: 'beach', timeLabel: '6:00 PM', status: 'pending', date: '2026-10-07', createdAt: now,
     });
 
     await db.doc(`likes/${likeId}`).set({ id: likeId, fromUid: ALICE, toUid: BOB, type: 'like', createdAt: now });
@@ -147,6 +202,14 @@ const seed = () =>
     // Entitlement doc exists but the membership is no longer active.
     await db.doc(`goldEntitlements/${FRANK}`).set({
       uid: FRANK, isGold: false, expiresAt: new Date('2020-01-01T00:00:00Z'),
+    });
+    // isGold still true, but the entitlement expired — the rules must deny.
+    await db.doc(`goldEntitlements/${GRACE}`).set({
+      uid: GRACE, isGold: true, goldActivatedAt: now, expiresAt: new Date('2020-01-01T00:00:00Z'),
+    });
+    // A genuinely active timed entitlement (future expiry) must still pass.
+    await db.doc(`goldEntitlements/${HOPE}`).set({
+      uid: HOPE, isGold: true, goldActivatedAt: now, expiresAt: new Date('2035-01-01T00:00:00Z'),
     });
 
     /* 💛 Gold Circle fixtures — a Gold post (Alice) and a legacy-Gold post
@@ -206,6 +269,90 @@ await allows('admin pending-verification query', () =>
 );
 await allows('discover query (array-contains interestedIn)', () =>
   asUser(ALICE).collection('profiles').where('interestedIn', 'array-contains', 'female').limit(20).get(),
+);
+
+console.log('\n?? private profile data (date of birth + verification selfie)');
+await allows('owner reads own private data', () =>
+  asUser(ALICE).doc(`profiles/${ALICE}/private/data`).get(),
+);
+await denies('another member reads my private data', () =>
+  asUser(BOB).doc(`profiles/${ALICE}/private/data`).get(),
+);
+await denies('anonymous reads private data', () =>
+  asAnon().doc(`profiles/${ALICE}/private/data`).get(),
+);
+await allows('admin reads a member private data', () =>
+  asUser(ADMIN).doc(`profiles/${ALICE}/private/data`).get(),
+);
+await denies('private data cannot be listed', () =>
+  asUser(ALICE).collection(`profiles/${ALICE}/private`).get(),
+);
+await denies('owner cannot write another member private data', () =>
+  asUser(ALICE).doc(`profiles/${BOB}/private/data`).set({
+    uid: BOB, dateOfBirth: new Date('1990-01-01T00:00:00Z'), updatedAt: new Date().toISOString(),
+  }),
+);
+await denies('underage date of birth rejected in private data', () =>
+  asUser(NEW).doc(`profiles/${NEW}/private/data`).set({
+    uid: NEW,
+    dateOfBirth: new Date(`${new Date().getUTCFullYear() - 15}-01-01T00:00:00Z`),
+    updatedAt: new Date().toISOString(),
+  }),
+);
+await denies('public profile cannot carry a date of birth', () =>
+  asUser(NEW3).doc(`profiles/${NEW3}`).set({
+    uid: NEW3, fullName: 'New3', photos: [], age: 30, dateOfBirth: '1990-01-01',
+    lastActiveAt: new Date().toISOString(), createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+  }),
+);
+await allows('profile create with an age matching the private date of birth', () =>
+  asUser(NEW).doc(`profiles/${NEW}`).set({
+    uid: NEW, fullName: 'New', photos: [], bio: '', gender: 'male', interestedIn: ['female'],
+    area: 'malindi-town', age: new Date().getUTCFullYear() - 1990,
+    lastActiveAt: new Date().toISOString(), createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+  }),
+);
+await denies('profile create with an age that contradicts the private date of birth', () =>
+  asUser(NEW2).doc(`profiles/${NEW2}`).set({
+    uid: NEW2, fullName: 'New2', photos: [], age: 25,
+    lastActiveAt: new Date().toISOString(), createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+  }),
+);
+await denies('public profile cannot introduce a verification selfie', () =>
+  asUser(ALICE).doc(`profiles/${ALICE}`).update({ verificationSelfie: 'file:///private-selfie.jpg' }),
+);
+await denies('public profile cannot carry a verification selfie path', () =>
+  asUser(ALICE).doc(`profiles/${ALICE}`).update({
+    verificationSelfiePath: `${ALICE}/verification/selfie_1.jpg`,
+  }),
+);
+await denies('owner cannot write a private verification selfie path', () =>
+  asUser(ALICE).doc(`profiles/${ALICE}/private/data`).update({
+    verificationSelfiePath: `${ALICE}/verification/selfie_1.jpg`,
+  }),
+);
+await denies('owner cannot write private verification selfie metadata', () =>
+  asUser(ALICE).doc(`profiles/${ALICE}/private/data`).update({
+    verificationSelfieMime: 'image/jpeg',
+  }),
+);
+await allows('owner can still update their private date of birth', () =>
+  asUser(ALICE).doc(`profiles/${ALICE}/private/data`).update({
+    dateOfBirth: new Date('1990-01-01T00:00:00Z'),
+  }),
+);
+await denies('admin client cannot write a private selfie path', () =>
+  asUser(ADMIN).doc(`profiles/${ALICE}/private/data`).update({
+    verificationSelfiePath: `${ALICE}/verification/selfie_1.jpg`,
+  }),
+);
+await denies('legacy public date of birth cannot be rewritten', () =>
+  asUser(LEGACY).doc(`profiles/${LEGACY}`).update({ dateOfBirth: '2001-01-01' }),
+);
+await allows('owner migrates a legacy public date of birth into the private doc', () =>
+  asUser(LEGACY).doc(`profiles/${LEGACY}`).update({
+    age: new Date().getUTCFullYear() - 1990, dateOfBirth: deleteField(),
+  }),
 );
 
 console.log('\nlikes');
@@ -295,6 +442,50 @@ await allows('member clears the chat (message delete)', () =>
   asUser(BOB).doc(`conversations/${convId}/messages/msg2`).delete(),
 );
 
+// --- match/conversation authenticity (no cold outreach) ------------------
+// CAROL already liked ALICE (committed earlier), so ALICE is the second liker
+// and may create the real match + conversation in one atomic commit.
+await allows('mutual like lets the second liker create the match + conversation', () => {
+  const db = asUser(ALICE);
+  const batch = db.batch();
+  batch.set(db.doc(`matches/match_${ALICE}__${CAROL}`), {
+    id: `match_${ALICE}__${CAROL}`, conversationId: `conv_${ALICE}__${CAROL}`,
+    uids: [ALICE, CAROL].sort(), status: 'new', blocked: false, createdAt: serverTimestamp(),
+  });
+  batch.set(db.doc(`conversations/conv_${ALICE}__${CAROL}`), {
+    id: `conv_${ALICE}__${CAROL}`, matchId: `match_${ALICE}__${CAROL}`,
+    members: [ALICE, CAROL].sort(), lastMessage: null, lastFrom: null, lastMessageAt: null,
+    unread: {}, messageCount: 0, createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
+  });
+  return batch.commit();
+});
+await denies('cannot fabricate a match without a reverse like', () =>
+  asUser(CAROL).doc(`matches/match_${CAROL}__${DAVE}`).set({
+    id: `match_${CAROL}__${DAVE}`, conversationId: `conv_${CAROL}__${DAVE}`,
+    uids: [CAROL, DAVE].sort(), status: 'new', blocked: false, createdAt: new Date().toISOString(),
+  }),
+);
+await denies('cannot open a conversation without a match', () =>
+  asUser(CAROL).doc(`conversations/conv_${CAROL}__${DAVE}`).set({
+    id: `conv_${CAROL}__${DAVE}`, matchId: null,
+    members: [CAROL, DAVE].sort(), lastMessage: null, lastFrom: null, lastMessageAt: null,
+    unread: {}, messageCount: 0, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+  }),
+);
+await denies('cannot message a non-match via a fabricated conversation', () =>
+  asUser(CAROL).doc(`conversations/conv_${CAROL}__DAVE_NOTREAL/messages/m1`).set({
+    id: 'm1', conversationId: `conv_${CAROL}__DAVE_NOTREAL`, senderUid: CAROL,
+    text: 'hey', read: false, type: 'text', createdAt: new Date().toISOString(),
+  }),
+);
+await allows('a matched pair can open their chat (existing match)', () =>
+  asUser(ALICE).doc('conversations/conv_aliceuid0001__bobuid000002_chat').set({
+    id: 'conv_aliceuid0001__bobuid000002_chat', matchId: null,
+    members: [ALICE, BOB].sort(), lastMessage: null, lastFrom: null, lastMessageAt: null,
+    unread: {}, messageCount: 0, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+  }),
+);
+
 console.log('\nnotifications');
 await allows('owner lists own inbox', () =>
   asUser(BOB).collection('notifications').where('uid', '==', BOB).orderBy('createdAt', 'desc').limit(20).get(),
@@ -374,15 +565,21 @@ await allows('unblock (delete own block)', () => asUser(ALICE).doc(`blocks/${blo
 await denies('delete someone elses block', () => asUser(CAROL).doc(`blocks/${blockB}`).delete());
 
 console.log('\nmeetups');
-await allows('propose a plan as the sender', () =>
-  asUser(CAROL).doc('meetups/meet2').set({
-    fromUid: CAROL, toUid: ALICE, activityId: 'walk', placeId: 'beach', timeLabel: '6:00 PM',
+await allows('matched pair propose a plan', () =>
+  asUser(ALICE).doc('meetups/meet2').set({
+    fromUid: ALICE, toUid: BOB, matchId, activityId: 'walk', placeId: 'beach', timeLabel: '6:00 PM',
+    status: 'pending', date: '2026-10-06', createdAt: new Date().toISOString(),
+  }),
+);
+await denies('unmatched pair cannot create a meetup', () =>
+  asUser(CAROL).doc('meetups/meet_fabricated').set({
+    fromUid: CAROL, toUid: DAVE, activityId: 'walk', placeId: 'beach', timeLabel: '6:00 PM',
     status: 'pending', date: '2026-10-06', createdAt: new Date().toISOString(),
   }),
 );
 await denies('propose a plan impersonating someone', () =>
   asUser(BOB).doc('meetups/meet3').set({
-    fromUid: ALICE, toUid: CAROL, activityId: 'walk', placeId: 'beach', timeLabel: '6:00 PM',
+    fromUid: ALICE, toUid: BOB, activityId: 'walk', placeId: 'beach', timeLabel: '6:00 PM',
     status: 'pending', date: '2026-10-06', createdAt: new Date().toISOString(),
   }),
 );
@@ -398,12 +595,43 @@ await allows('receiver accepts the plan', () =>
   }),
 );
 await denies('sender cannot answer their own plan', () =>
-  asUser(CAROL).doc('meetups/meet2').update({
-    status: 'accepted', respondedAt: new Date().toISOString(), respondedBy: CAROL,
+  asUser(ALICE).doc('meetups/meet2').update({
+    status: 'accepted', respondedAt: new Date().toISOString(), respondedBy: ALICE,
+  }),
+);
+await denies('stranger cannot change someone elses plan', () =>
+  asUser(CAROL).doc('meetups/meet1').update({
+    status: 'declined', respondedAt: new Date().toISOString(), respondedBy: CAROL,
   }),
 );
 await denies('receiver cannot rewrite plan details', () =>
   asUser(BOB).doc('meetups/meet1').update({ placeId: 'private-home' }),
+);
+
+console.log('\nmeetup notifications (participants only)');
+await allows('sender notifies the matched receiver about the plan', () =>
+  asUser(ALICE).collection('notifications').add({
+    uid: BOB, type: 'meetup', title: 'Meet plan', body: '', data: { meetupId: 'meet1' },
+    read: false, createdAt: new Date().toISOString(),
+  }),
+);
+await allows('receiver notifies the sender about their response', () =>
+  asUser(BOB).collection('notifications').add({
+    uid: ALICE, type: 'meetup', title: 'Meetup confirmed', body: '', data: { meetupId: 'meet1' },
+    read: false, createdAt: new Date().toISOString(),
+  }),
+);
+await denies('forged meetup notification about a plan you are not in', () =>
+  asUser(CAROL).collection('notifications').add({
+    uid: BOB, type: 'meetup', title: 'Fake', body: '', data: { meetupId: 'meet1' },
+    read: false, createdAt: new Date().toISOString(),
+  }),
+);
+await denies('participant cannot notify an unrelated third party', () =>
+  asUser(ALICE).collection('notifications').add({
+    uid: CAROL, type: 'meetup', title: 'Fake', body: '', data: { meetupId: 'meet1' },
+    read: false, createdAt: new Date().toISOString(),
+  }),
 );
 
 console.log('\nreports');
@@ -643,6 +871,29 @@ await allows('once the block is lifted the member can interact again', () =>
   goldDave.doc('goldCirclePosts/gpost1/comments/cok1').set(validComment(DAVE)),
 );
 
+// --- entitlement expiry: enforced by the rules, never the client ---------
+console.log('\n💛 gold entitlement expiry (server-enforced)');
+await denies('expired Gold entitlement is denied the feed', () =>
+  asUser(GRACE).collection('goldCirclePosts').orderBy('createdAt', 'desc').limit(12).get(),
+);
+await denies('expired Gold entitlement cannot post', () =>
+  asUser(GRACE).collection('goldCirclePosts').add(validPost(GRACE)),
+);
+await denies('expired Gold entitlement cannot vote', () => {
+  const db = asUser(GRACE);
+  const batch = db.batch();
+  batch.set(db.doc('goldCircleDailyTopics/2026-05-05'), {
+    counts: [1, 0], sum: 1, updatedAt: serverTimestamp(),
+  });
+  batch.set(db.doc(`goldCircleDailyTopics/2026-05-05/votes/${GRACE}`), {
+    option: 0, createdAt: serverTimestamp(),
+  });
+  return batch.commit();
+});
+await allows('active timed Gold entitlement (future expiry) reads the feed', () =>
+  asUser(HOPE).collection('goldCirclePosts').orderBy('createdAt', 'desc').limit(12).get(),
+);
+
 // --- deletions: own post or admin ----------------------------------------
 await denies('gold member cannot delete someone elses post', () =>
   goldAlice.doc('goldCirclePosts/gpost2').delete(),
@@ -723,6 +974,46 @@ await denies('a vote cannot be changed', () =>
 );
 await denies('a vote cannot be deleted', () =>
   goldAlice.doc(`goldCircleDailyTopics/${DAY}/votes/${ALICE}`).delete(),
+);
+
+console.log('\n?? meetup responses freeze when either side blocks');
+const dgBlock = `block_${[DAVE, GRACE].sort().join('__')}`;
+await allows('receiver accepts an invite while nobody is blocked', () =>
+  asUser(GRACE).doc('meetups/meet_ok').update({
+    status: 'accepted', respondedAt: new Date().toISOString(), respondedBy: GRACE,
+  }),
+);
+// Blocks are order-independent (one canonical doc per pair), so this single
+// block created by the sender also governs the receiver's response.
+await allows('the sender blocks the receiver', () =>
+  asUser(DAVE).doc(`blocks/${dgBlock}`).set({
+    id: dgBlock, uid: DAVE, blockedUid: GRACE, createdAt: new Date().toISOString(),
+  }),
+);
+await denies('blocked receiver cannot accept an invite', () =>
+  asUser(GRACE).doc('meetups/meet_block').update({
+    status: 'accepted', respondedAt: new Date().toISOString(), respondedBy: GRACE,
+  }),
+);
+await denies('blocked receiver cannot decline an invite', () =>
+  asUser(GRACE).doc('meetups/meet_block').update({
+    status: 'declined', respondedAt: new Date().toISOString(), respondedBy: GRACE,
+  }),
+);
+// Other direction: after the sender removes the block, the receiver blocks the
+// sender — the same canonical doc must still freeze the response.
+await allows('the sender removes the block', () =>
+  asUser(DAVE).doc(`blocks/${dgBlock}`).delete(),
+);
+await allows('the receiver blocks the sender', () =>
+  asUser(GRACE).doc(`blocks/${dgBlock}`).set({
+    id: dgBlock, uid: GRACE, blockedUid: DAVE, createdAt: new Date().toISOString(),
+  }),
+);
+await denies('receiver cannot accept once they blocked the sender', () =>
+  asUser(GRACE).doc('meetups/meet_block').update({
+    status: 'accepted', respondedAt: new Date().toISOString(), respondedBy: GRACE,
+  }),
 );
 
 console.log(`\n${passed} passed, ${failed} failed`);

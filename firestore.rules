@@ -42,6 +42,34 @@ service cloud.firestore {
           $(a < b ? 'block_' + a + '__' + b : 'block_' + b + '__' + a));
     }
 
+    /** The other member of a two-uid list (relative to the caller). */
+    function otherMember(uids) {
+      return uids[0] == uid() ? uids[1] : uids[0];
+    }
+
+    /**
+     * True when `fromUid` has a real, committed like on the caller. Likes use
+     * ONE order-independent doc per pair, so going mutual leaves the stored
+     * doc as first-liker (fromUid) -> second-liker (toUid == uid()). This is
+     * what makes a match authentic instead of a client-fabricated document.
+     */
+    function likedMe(fromUid) {
+      return exists(/databases/$(database)/documents/likes/$(pairId('like', fromUid, uid()))) &&
+        get(/databases/$(database)/documents/likes/$(pairId('like', fromUid, uid()))).data.fromUid == fromUid &&
+        get(/databases/$(database)/documents/likes/$(pairId('like', fromUid, uid()))).data.toUid == uid() &&
+        get(/databases/$(database)/documents/likes/$(pairId('like', fromUid, uid()))).data.type == 'like';
+    }
+
+    /**
+     * A conversation may only exist for a real pair: the match is either
+     * already committed (opening an existing match's chat) or being created in
+     * the same atomic commit (the mutual-like transaction in likeService).
+     */
+    function matchExistsFor(members) {
+      return exists(/databases/$(database)/documents/matches/$(pairId('match', members[0], members[1]))) ||
+        existsAfter(/databases/$(database)/documents/matches/$(pairId('match', members[0], members[1])));
+    }
+
     /** Fields no client may ever write on a profile. */
     function profileIsWritable() {
       return !request.resource.data.diff(resource.data).affectedKeys()
@@ -49,12 +77,72 @@ service cloud.firestore {
     }
 
     /* ---------------------------------------------------------------- *
+     * Private profile data — date of birth + verification selfie live in *
+     * profiles/{uid}/private/data, readable by the owner and admins only. *
+     * The public profile keeps a single derived, non-identifying `age`.   *
+     * ---------------------------------------------------------------- */
+
+    /** Age (UTC whole years) implied by a timestamp date of birth. */
+    function ageFromDob(dob) {
+      return request.time.year() - dob.year() -
+        ((request.time.month() > dob.month() ||
+          (request.time.month() == dob.month() && request.time.day() >= dob.day())) ? 0 : 1);
+    }
+
+    /** Date of birth from the private doc, whether already stored or written now. */
+    function privateDob(userId) {
+      return exists(/databases/$(database)/documents/profiles/$(userId)/private/data)
+        ? get(/databases/$(database)/documents/profiles/$(userId)/private/data).data.dateOfBirth
+        : existsAfter(/databases/$(database)/documents/profiles/$(userId)/private/data)
+          ? getAfter(/databases/$(database)/documents/profiles/$(userId)/private/data).data.dateOfBirth
+          : null;
+    }
+
+    /**
+     * The public `age` must be the age implied by the private date of birth.
+     * Tolerance of +1 day covers the UTC-vs-local birthday boundary so a
+     * genuine client save never fails; it still blocks arbitrary ages.
+     */
+    function derivedAgeMatches(userId, age) {
+      return privateDob(userId) is timestamp &&
+        age >= ageFromDob(privateDob(userId)) &&
+        age <= ageFromDob(privateDob(userId)) + 1;
+    }
+
+    /**
+     * Sensitive owner-only fields must never live on the public profile: they
+     * may be removed or left untouched, but never (re)introduced or changed
+     * through profiles/{uid}. The verification selfie's storage path and
+     * metadata are written only by the trusted backend into the private doc.
+     */
+    function sensitiveFieldsStayPrivate() {
+      return !(request.resource.data.keys().hasAny([
+          'dateOfBirth', 'verificationSelfie', 'verificationSelfiePath',
+          'verificationSelfieBucket', 'verificationSelfieMime',
+          'verificationSelfieBytes', 'verificationSelfieUpdatedAt'
+        ]) &&
+        request.resource.data.diff(resource.data).affectedKeys().hasAny([
+          'dateOfBirth', 'verificationSelfie', 'verificationSelfiePath',
+          'verificationSelfieBucket', 'verificationSelfieMime',
+          'verificationSelfieBytes', 'verificationSelfieUpdatedAt'
+        ]));
+    }
+
+    /* ---------------------------------------------------------------- *
      * 💛 Gold membership — one source of truth for Gold-only features    *
      * ---------------------------------------------------------------- */
 
-    /** Current entitlement doc (goldEntitlements/{uid}) says isGold. */
+    /**
+     * Current entitlement doc (goldEntitlements/{uid}) says isGold AND has not
+     * expired. Gold is a lifetime one-time purchase (expiresAt null/absent),
+     * but a timed/relabelled entitlement still expires server-side here —
+     * the client is never trusted. A non-timestamp `expiresAt` is ignored so a
+     * malformed value can never lock out a genuine lifetime entitlement.
+     */
     function entitlementIsGold(data) {
-      return data.get('isGold', false) == true;
+      return data.get('isGold', false) == true &&
+        !(data.get('expiresAt', null) is timestamp &&
+          data.get('expiresAt', null) <= request.time);
     }
 
     /** Legacy profiles carried `gold.isGold` or `premium.active` inline. */
@@ -105,19 +193,69 @@ service cloud.firestore {
      * ---------------------------------------------------------------- */
 
     match /profiles/{userId} {
-      // Signed-in members read profiles (discover, deck, compatibility).
+      // Signed-in members read PUBLIC profiles (discover, deck, compatibility).
+      // The full date of birth is never here — it stays in the private doc.
       allow get: if signedIn();
       allow list: if signedIn();
 
+      // A public profile may only be created together with its private doc
+      // (same atomic batch), so `dateOfBirth` is never exposed and the derived
+      // `age` is guaranteed to match the owner-only date of birth.
       allow create: if signedIn() && uid() == userId &&
         request.resource.data.uid == userId &&
-        !request.resource.data.keys().hasAny(['gold', 'premium', 'plan', 'role']);
+        !request.resource.data.keys().hasAny(['gold', 'premium', 'plan', 'role', 'dateOfBirth', 'verificationSelfie']) &&
+        request.resource.data.age is int &&
+        request.resource.data.age >= 18 &&
+        request.resource.data.age <= 120 &&
+        derivedAgeMatches(userId, request.resource.data.age);
 
-      // Owners edit themselves, admins run verification/suspension.
+      // Owners edit themselves, admins run verification/suspension. If the
+      // derived age changes it must still equal the private date of birth.
       allow update: if signedIn() && (uid() == userId || isAdmin()) &&
-        profileIsWritable();
+        profileIsWritable() &&
+        sensitiveFieldsStayPrivate() &&
+        (
+          !request.resource.data.diff(resource.data).affectedKeys().hasAny(['age']) ||
+          (uid() == userId && derivedAgeMatches(userId, request.resource.data.age))
+        );
 
       allow delete: if isAdmin();
+
+      // Owner + admins may read the date of birth / verification selfie path;
+      // the owner is the only client writer, and the date of birth is always
+      // required and must describe an adult. Never listable (there is only ever
+      // one doc).
+      //
+      // Verification selfie metadata (private storage path + mime/size) is
+      // written EXCLUSIVELY by the trusted backend with Admin credentials
+      // (which bypass these rules). Clients are denied from touching it, so a
+      // member can never point their private doc at another member's object.
+      match /private/{docId} {
+        allow get: if signedIn() && (uid() == userId || isAdmin());
+        allow list: if false;
+
+        allow create: if signedIn() && uid() == userId && docId == 'data' &&
+          request.resource.data.uid == userId &&
+          request.resource.data.dateOfBirth is timestamp &&
+          ageFromDob(request.resource.data.dateOfBirth) >= 18 &&
+          ageFromDob(request.resource.data.dateOfBirth) <= 120 &&
+          !request.resource.data.keys().hasAny([
+            'verificationSelfie', 'verificationSelfiePath', 'verificationSelfieBucket',
+            'verificationSelfieMime', 'verificationSelfieBytes', 'verificationSelfieUpdatedAt'
+          ]);
+
+        allow update: if signedIn() && uid() == userId && docId == 'data' &&
+          request.resource.data.uid == userId &&
+          request.resource.data.dateOfBirth is timestamp &&
+          ageFromDob(request.resource.data.dateOfBirth) >= 18 &&
+          ageFromDob(request.resource.data.dateOfBirth) <= 120 &&
+          !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+            'verificationSelfie', 'verificationSelfiePath', 'verificationSelfieBucket',
+            'verificationSelfieMime', 'verificationSelfieBytes', 'verificationSelfieUpdatedAt'
+          ]);
+
+        allow delete: if false;
+      }
     }
 
     /* ---------------------------------------------------------------- *
@@ -156,9 +294,16 @@ service cloud.firestore {
       allow list: if isAdmin() ||
         (signedIn() && uid() in resource.data.uids);
 
+      // A match is only real when the other member already liked the caller;
+      // the app creates it inside the mutual-like transaction (`likedMe`).
+      // The doc id must be the canonical id for its uids, so other rules can
+      // trust `matches/match_{a}__{b}` as proof of that exact pair.
       allow create: if signedIn() &&
         request.resource.data.uids.size() == 2 &&
-        uid() in request.resource.data.uids;
+        request.resource.data.uids[0] != request.resource.data.uids[1] &&
+        uid() in request.resource.data.uids &&
+        matchId == pairId('match', request.resource.data.uids[0], request.resource.data.uids[1]) &&
+        likedMe(otherMember(request.resource.data.uids));
 
       // Participants flag `blocked` (and only that) when one blocks the other.
       allow update: if signedIn() && uid() in resource.data.uids &&
@@ -178,9 +323,13 @@ service cloud.firestore {
       allow list: if isAdmin() ||
         (signedIn() && uid() in resource.data.members);
 
+      // A conversation is a real match's chat, never a cold-outreach channel:
+      // the pair must have a committed match (or one created in this commit).
       allow create: if signedIn() &&
         request.resource.data.members.size() == 2 &&
-        uid() in request.resource.data.members;
+        request.resource.data.members[0] != request.resource.data.members[1] &&
+        uid() in request.resource.data.members &&
+        matchExistsFor(request.resource.data.members);
 
       // Members send messages (unread counters, summary) but the roster is fixed.
       allow update: if signedIn() && uid() in resource.data.members &&
@@ -221,8 +370,22 @@ service cloud.firestore {
     match /meetups/{meetupId} {
       allow get: if signedIn() && (resource == null || uid() in [resource.data.fromUid, resource.data.toUid]);
       allow list: if signedIn() && (resource.data.fromUid == uid() || resource.data.toUid == uid());
-      allow create: if signedIn() && request.resource.data.fromUid == uid() && request.resource.data.status == 'pending';
-      allow update: if signedIn() && resource.data.toUid == uid() && request.resource.data.status in ['accepted', 'declined'] && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'respondedAt', 'respondedBy']);
+      // An invite is only valid between two people who really matched (proven
+      // by the committed match doc) and who have not blocked each other — it
+      // is never a channel to cold-contact a stranger.
+      allow create: if signedIn() &&
+        request.resource.data.fromUid == uid() &&
+        request.resource.data.toUid is string &&
+        request.resource.data.toUid != uid() &&
+        request.resource.data.status == 'pending' &&
+        !blockedBetween(request.resource.data.fromUid, request.resource.data.toUid) &&
+        matchExistsFor([request.resource.data.fromUid, request.resource.data.toUid]);
+      // Only the receiver answers, and only while neither side has blocked the
+      // other — a block freezes any outstanding invite in both directions.
+      allow update: if signedIn() && resource.data.toUid == uid() &&
+        !blockedBetween(resource.data.fromUid, resource.data.toUid) &&
+        request.resource.data.status in ['accepted', 'declined'] &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'respondedAt', 'respondedBy']);
       allow delete: if isAdmin();
     }
 
@@ -254,6 +417,13 @@ service cloud.firestore {
         uid() == get(/databases/$(database)/documents/meetups/$(meetupId)).data.toUid;
     }
 
+    /** The other side of a real meetup relative to the caller (its recipient). */
+    function meetupOtherUid(meetupId) {
+      return get(/databases/$(database)/documents/meetups/$(meetupId)).data.fromUid == uid()
+        ? get(/databases/$(database)/documents/meetups/$(meetupId)).data.toUid
+        : get(/databases/$(database)/documents/meetups/$(meetupId)).data.fromUid;
+    }
+
     match /notifications/{notificationId} {
       allow get, list: if signedIn() && resource.data.uid == uid();
 
@@ -272,9 +442,11 @@ service cloud.firestore {
           (request.resource.data.type == 'match' &&
             exists(/databases/$(database)/documents/matches/
               $(pairId('match', uid(), request.resource.data.uid)))) ||
-          // The plan is real and the sender is part of it.
+          // The plan is real, the sender is part of it, and the inbox owner is
+          // the other participant (never a third party).
           (request.resource.data.type == 'meetup' &&
-            meetupParticipant(request.resource.data.data.meetupId)) ||
+            meetupParticipant(request.resource.data.data.meetupId) &&
+            request.resource.data.uid == meetupOtherUid(request.resource.data.data.meetupId)) ||
           // Only an admin may push verification results to someone else.
           (request.resource.data.type == 'verification' && isAdmin())
         );

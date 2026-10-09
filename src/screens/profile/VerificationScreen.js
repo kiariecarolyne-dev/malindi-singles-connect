@@ -7,6 +7,7 @@ import Button from '../../components/Button';
 import Screen from '../../components/Screen';
 import ScreenHeader from '../../components/ScreenHeader';
 import { useAuth } from '../../context/AuthContext';
+import { uploadVerificationSelfie } from '../../services/backend/verificationService';
 import { colors, radius, spacing } from '../../theme';
 import { pickImage } from '../../utils/imagePicker';
 
@@ -46,9 +47,11 @@ const VerificationScreen = ({ navigation }) => {
     setBusy(true);
     setError(null);
     try {
+      // Upload the selfie through the trusted backend (private bucket + path in
+      // the owner-only private doc), then flag the public profile for review.
+      await uploadVerificationSelfie(selfie);
       await saveProfile({
         verification: { ...(profile?.verification || {}), status: 'pending', selfie: true },
-        verificationSelfie: selfie,
       });
       setStage('pending');
     } catch (e) {

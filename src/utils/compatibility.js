@@ -3,7 +3,7 @@
  * Weights: intention 30, interests 25, age preference 15,
  *          location 15, activity 15.
  */
-import { calculateAge } from './age';
+import { profileAge } from './age';
 
 const clamp = (n, min, max) => Math.max(min, Math.min(max, n));
 
@@ -27,8 +27,8 @@ const interestScore = (a = [], b = []) => {
 };
 
 const ageScore = (profile, viewer) => {
-  const pAge = calculateAge(profile.dateOfBirth);
-  const vAge = calculateAge(viewer.dateOfBirth);
+  const pAge = profileAge(profile);
+  const vAge = profileAge(viewer);
   if (!pAge || !vAge) return 60;
   const pPref = profile.preferences || {};
   const vPref = viewer.preferences || {};

@@ -26,7 +26,7 @@ import { getIntention } from '../../constants/datingIntentions';
 import { getInterestsByIds } from '../../constants/interests';
 import { useAuth } from '../../context/AuthContext';
 import { likeService, matchService, premiumService, profileService } from '../../services';
-import { calculateAge } from '../../utils/age';
+import { profileAge } from '../../utils/age';
 import { compatibilityScore } from '../../utils/compatibility';
 import { haversineKm, shortDistance } from '../../utils/distance';
 import { isActiveRecently } from '../../utils/time';
@@ -146,7 +146,7 @@ const ProfileDetailScreen = ({ navigation, route }) => {
     );
   }
 
-  const age = calculateAge(other.dateOfBirth);
+  const age = profileAge(other);
   const intention = getIntention(other.datingIntention);
   const interests = getInterestsByIds(other.interests);
   const active = isActiveRecently(other.lastActiveAt);

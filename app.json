@@ -5,6 +5,7 @@
     "version": "1.0.0",
     "orientation": "portrait",
     "scheme": "malindisingles",
+    "icon": "./assets/icon.png",
     "userInterfaceStyle": "dark",
     "backgroundColor": "#0A0F1E",
     "assetBundlePatterns": [
@@ -17,7 +18,8 @@
     "android": {
       "package": "co.ke.malindisinglesconnect",
       "adaptiveIcon": {
-        "backgroundColor": "#0A0F1E"
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#FFFFFF"
       },
       "permissions": [
         "android.permission.READ_EXTERNAL_STORAGE",

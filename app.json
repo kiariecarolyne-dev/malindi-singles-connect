@@ -20,8 +20,9 @@
         "backgroundColor": "#0A0F1E"
       },
       "permissions": [
-        "READ_EXTERNAL_STORAGE",
-        "WRITE_EXTERNAL_STORAGE"
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+        "android.permission.RECORD_AUDIO"
       ]
     },
     "web": {
@@ -37,7 +38,10 @@
       "expo-font"
     ],
     "extra": {
-      "appTagline": "Meet. Match. Connect. Today."
+      "appTagline": "Meet. Match. Connect. Today.",
+      "eas": {
+        "projectId": "a28a91b8-bc8e-4c37-beb3-484104d32a10"
+      }
     }
   }
 }

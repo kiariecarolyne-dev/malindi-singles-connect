@@ -21,11 +21,13 @@ import ErrorState from '../../components/ErrorState';
 import Screen from '../../components/Screen';
 import Skeleton from '../../components/Skeleton';
 import { LIMITS } from '../../config/env';
+import { getDailyTopic, getFormat } from '../../constants/goldCircleTopics';
 import { useAuth } from '../../context/AuthContext';
 import { goldCircleService, premiumService, profileService } from '../../services';
 import { colors, gradients, radius, spacing } from '../../theme';
 import { pickPostImage } from '../../utils/imagePicker';
 import GoldCircleComments from './GoldCircleComments';
+import GoldCircleDailyTopic from './GoldCircleDailyTopic';
 import GoldCirclePostCard from './GoldCirclePostCard';
 import GoldCircleUpgrade from './GoldCircleUpgrade';
 
@@ -66,8 +68,15 @@ const GoldCircleFeed = ({ navigation }) => {
   const [submitting, setSubmitting] = useState(false);
   const [composerError, setComposerError] = useState(null);
 
+  const [dailyTopic, setDailyTopic] = useState(() => getDailyTopic());
+  const [voteInfo, setVoteInfo] = useState({ dayKey: null, tally: null, myVote: null });
+  const [voting, setVoting] = useState(false);
+
   const inputRef = useRef(null);
   const listRef = useRef(null);
+  const dayKey = dailyTopic.dayKey;
+  const currentVote = voteInfo.dayKey === dayKey ? voteInfo : null;
+  const myVote = currentVote ? currentVote.myVote : null;
 
   const fetchFirstPage = useCallback(async () => {
     const page = await goldCircleService.getFeed(user.uid, null);
@@ -91,6 +100,48 @@ const GoldCircleFeed = ({ navigation }) => {
       cancelled = true;
     };
   }, [fetchFirstPage]);
+
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      try {
+        const [counts, mine] = await Promise.all([
+          goldCircleService.getDailyTally(dayKey),
+          goldCircleService.getMyDailyVote(user.uid, dayKey),
+        ]);
+        if (active) {
+          setVoteInfo({ dayKey, tally: counts, myVote: typeof mine === 'number' ? mine : null });
+        }
+      } catch {
+        if (active) setVoteInfo({ dayKey, tally: null, myVote: null });
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [dayKey, user.uid]);
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      const next = getDailyTopic();
+      setDailyTopic((current) => (current.dayKey === next.dayKey ? current : next));
+    }, 60 * 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const handleVote = async (optionIndex) => {
+    if (voting || myVote !== null) return;
+    setVoting(true);
+    try {
+      await goldCircleService.voteDailyTopic({ uid: user.uid, dayKey, optionIndex });
+      const counts = await goldCircleService.getDailyTally(dayKey);
+      setVoteInfo({ dayKey, tally: counts, myVote: optionIndex });
+    } catch (e) {
+      Alert.alert('Vote not saved', e.message || 'Please try again.');
+    } finally {
+      setVoting(false);
+    }
+  };
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -137,27 +188,24 @@ const GoldCircleFeed = ({ navigation }) => {
       setWhatsappNumber('');
       return;
     }
-    Alert.alert(
-      '📱 Share my WhatsApp',
-      'Your WhatsApp number will be visible to Gold Circle members. Continue?',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Continue',
-          onPress: () => {
-            setShareWhatsapp(true);
-            setWhatsappNumber((prev) => prev || profile?.phone || profile?.whatsapp || '');
-          },
-        },
-      ],
-    );
+    // Explicit opt-in only — the number is confirmed again before publishing.
+    setShareWhatsapp(true);
+    setWhatsappNumber((prev) => prev || profile?.phone || profile?.whatsapp || '');
   };
+
+  const confirmPublish = (title, message, confirmLabel) =>
+    new Promise((resolve) => {
+      Alert.alert(title, message, [
+        { text: 'Cancel', style: 'cancel', onPress: () => resolve(false) },
+        { text: confirmLabel, onPress: () => resolve(true) },
+      ]);
+    });
 
   const submit = async () => {
     if (submitting) return;
     setComposerError(null);
-    if (!text.trim()) {
-      setComposerError('Your post needs some text before you share it.');
+    if (!text.trim() && !image) {
+      setComposerError('Write something or add a photo before you share.');
       return;
     }
     let whatsapp = null;
@@ -168,6 +216,12 @@ const GoldCircleFeed = ({ navigation }) => {
         setComposerError(e.message);
         return;
       }
+      const confirmed = await confirmPublish(
+        '📱 Share my WhatsApp?',
+        `${whatsapp} will be visible to Gold Circle members on this post. Publish now?`,
+        'Publish',
+      );
+      if (!confirmed) return;
     }
 
     setSubmitting(true);
@@ -297,15 +351,15 @@ const GoldCircleFeed = ({ navigation }) => {
               style={styles.heroSide}
               hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
             >
-              <Ionicons name="chevron-back" size={24} color={colors.text} />
+              <Ionicons name="chevron-back" size={22} color={colors.text} />
             </TouchableOpacity>
           ) : (
             <View style={styles.heroSide} />
           )}
-          <Text style={styles.heroTitle}>💛 GOLD CIRCLE</Text>
+          <Text style={styles.heroTitle}>Gold Circle 🔥</Text>
           <View style={styles.heroSide} />
         </View>
-        <Text style={styles.heroSub}>Exclusive community for Malindi Gold members</Text>
+        <Text style={styles.heroSub}>One topic a day. One community. Talk about what matters.</Text>
         <LinearGradient
           colors={gradients.gold}
           start={{ x: 0, y: 0 }}
@@ -314,10 +368,20 @@ const GoldCircleFeed = ({ navigation }) => {
         />
       </View>
 
+      <GoldCircleDailyTopic
+        topic={dailyTopic}
+        format={getFormat(dailyTopic.format)}
+        tally={currentVote ? currentVote.tally : null}
+        myVote={myVote}
+        voting={voting}
+        onVote={handleVote}
+        onJoin={() => inputRef.current?.focus()}
+      />
+
       <View style={styles.composer}>
         <View style={styles.composerHead}>
-          <Avatar uri={profile?.photos?.[0]} name={profile?.fullName} size={36} />
-          <Text style={styles.composerTitle}>What&apos;s on your mind?</Text>
+          <Avatar uri={profile?.photos?.[0]} name={profile?.fullName} size={32} />
+          <Text style={styles.composerTitle}>Join today&apos;s discussion</Text>
         </View>
 
         <TextInput
@@ -328,7 +392,7 @@ const GoldCircleFeed = ({ navigation }) => {
             setText(value);
             if (composerError) setComposerError(null);
           }}
-          placeholder="Share your thoughts, relationship experiences, questions, photos or success story..."
+          placeholder="Share your take on today&apos;s topic, or post your own..."
           placeholderTextColor={colors.textMuted}
           multiline
           maxLength={LIMITS.goldCirclePostMaxLength}
@@ -339,7 +403,7 @@ const GoldCircleFeed = ({ navigation }) => {
           <View style={styles.previewWrap}>
             <Text style={styles.previewLabel}>📷 {image.fileName || 'Photo attached'}</Text>
             <TouchableOpacity onPress={() => setImage(null)} style={styles.previewRemove}>
-              <Ionicons name="close-circle" size={20} color={colors.danger} />
+              <Ionicons name="close-circle" size={18} color={colors.danger} />
             </TouchableOpacity>
           </View>
         ) : null}
@@ -368,7 +432,7 @@ const GoldCircleFeed = ({ navigation }) => {
           showsHorizontalScrollIndicator={false}
           contentContainerStyle={styles.chipRow}
         >
-          {goldCircleService.CATEGORIES.map((c) => {
+          {goldCircleService.CATEGORIES.filter((c) => c.id !== 'photo').map((c) => {
             const on = category === c.id;
             return (
               <TouchableOpacity
@@ -389,32 +453,33 @@ const GoldCircleFeed = ({ navigation }) => {
 
         <View style={styles.composerActions}>
           <TouchableOpacity style={styles.attachBtn} onPress={attachPhoto} disabled={submitting}>
-            <Ionicons name="image-outline" size={20} color={image ? colors.gold : colors.textSecondary} />
+            <Ionicons name="image-outline" size={17} color={image ? colors.gold : colors.textSecondary} />
             <Text style={[styles.attachText, image && styles.attachTextOn]}>Photo</Text>
           </TouchableOpacity>
 
           <TouchableOpacity
-            style={[styles.attachBtn, shareWhatsapp && styles.attachBtnOn]}
+            style={styles.attachBtn}
             onPress={toggleWhatsapp}
             disabled={submitting}
           >
             <Ionicons
               name="logo-whatsapp"
-              size={20}
+              size={17}
               color={shareWhatsapp ? colors.success : colors.textSecondary}
             />
             <Text style={[styles.attachText, shareWhatsapp && styles.attachTextSuccess]}>
-              {shareWhatsapp ? 'Sharing' : 'Share my WhatsApp'}
+              {shareWhatsapp ? 'Sharing' : 'WhatsApp'}
             </Text>
           </TouchableOpacity>
 
           <Button
             title="Post"
             variant="gold"
+            icon="send"
             small
             onPress={submit}
             loading={submitting}
-            disabled={!text.trim() || submitting}
+            disabled={(!text.trim() && !image) || submitting}
             style={styles.postBtn}
           />
         </View>
@@ -482,6 +547,7 @@ const GoldCircleFeed = ({ navigation }) => {
             <GoldCirclePostCard
               post={item}
               viewerUid={user.uid}
+              onPressAuthor={(p) => navigation.navigate('ProfileDetail', { uid: p.authorUid })}
               onPressLike={onPressLike}
               onPressComments={setCommentsPost}
               onPressMenu={onPressMenu}
@@ -529,7 +595,7 @@ const styles = StyleSheet.create({
 
   hero: {
     backgroundColor: colors.backgroundAlt,
-    borderRadius: radius.lg,
+    borderRadius: radius.xl,
     borderWidth: 1,
     borderColor: colors.goldSoft,
     paddingVertical: spacing.lg,
@@ -538,23 +604,23 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   heroRow: { flexDirection: 'row', alignItems: 'center', alignSelf: 'stretch' },
-  heroSide: { width: 34, alignItems: 'center' },
+  heroSide: { width: 32, alignItems: 'center' },
   heroTitle: {
     flex: 1,
     textAlign: 'center',
     color: colors.text,
-    fontSize: 19,
-    fontWeight: '900',
-    letterSpacing: 1.2,
+    fontSize: 20,
+    fontWeight: '800',
+    letterSpacing: 0.4,
   },
   heroSub: {
     color: colors.textSecondary,
     fontSize: 12,
-    fontWeight: '600',
+    fontWeight: '500',
     textAlign: 'center',
     marginTop: spacing.xs,
   },
-  heroLine: { height: 3, borderRadius: 2, alignSelf: 'stretch', marginTop: spacing.md },
+  heroLine: { width: 48, height: 2, borderRadius: 2, alignSelf: 'center', marginTop: spacing.md },
 
   composer: {
     backgroundColor: colors.surface,
@@ -565,12 +631,12 @@ const styles = StyleSheet.create({
     marginBottom: spacing.md,
   },
   composerHead: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
-  composerTitle: { color: colors.text, fontSize: 15, fontWeight: '800' },
+  composerTitle: { color: colors.text, fontSize: 14, fontWeight: '700' },
   composerInput: {
     color: colors.text,
     fontSize: 15,
     lineHeight: 21,
-    minHeight: 76,
+    minHeight: 64,
     textAlignVertical: 'top',
     marginTop: spacing.sm,
   },
@@ -589,17 +655,17 @@ const styles = StyleSheet.create({
   previewRemove: { padding: 2 },
 
   whatsappBox: {
-    backgroundColor: colors.backgroundAlt,
+    backgroundColor: colors.surfaceLight,
     borderRadius: radius.md,
     borderWidth: 1,
-    borderColor: colors.success,
+    borderColor: colors.border,
     padding: spacing.sm,
     marginTop: spacing.xs,
   },
-  whatsappLabel: { color: colors.text, fontSize: 12, fontWeight: '800' },
+  whatsappLabel: { color: colors.text, fontSize: 11, fontWeight: '700' },
   whatsappInput: {
     color: colors.text,
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: '700',
     letterSpacing: 1,
     marginTop: spacing.xs,
@@ -607,17 +673,17 @@ const styles = StyleSheet.create({
   },
   whatsappHint: { color: colors.textMuted, fontSize: 11, marginTop: 2 },
 
-  chipRow: { gap: spacing.sm, paddingVertical: spacing.sm },
+  chipRow: { gap: spacing.xs, paddingVertical: spacing.sm },
   chip: {
     borderWidth: 1,
     borderColor: colors.border,
     backgroundColor: colors.surfaceLight,
     borderRadius: radius.round,
-    paddingHorizontal: spacing.md,
-    paddingVertical: 7,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 5,
   },
   chipOn: { borderColor: colors.gold, backgroundColor: colors.goldSoft },
-  chipText: { color: colors.textSecondary, fontSize: 12, fontWeight: '700' },
+  chipText: { color: colors.textSecondary, fontSize: 11, fontWeight: '600' },
   chipTextOn: { color: colors.gold },
 
   composerError: { color: colors.danger, fontSize: 12, marginTop: spacing.xs },
@@ -631,16 +697,11 @@ const styles = StyleSheet.create({
   attachBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 5,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.surfaceLight,
-    borderRadius: radius.round,
-    paddingHorizontal: spacing.md,
-    paddingVertical: 8,
+    gap: 4,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 6,
   },
-  attachBtnOn: { borderColor: colors.success },
-  attachText: { color: colors.textSecondary, fontSize: 12, fontWeight: '700' },
+  attachText: { color: colors.textSecondary, fontSize: 11, fontWeight: '600' },
   attachTextOn: { color: colors.gold },
   attachTextSuccess: { color: colors.success },
   postBtn: { flex: 1 },

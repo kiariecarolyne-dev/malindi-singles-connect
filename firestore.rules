@@ -310,8 +310,15 @@ service cloud.firestore {
         request.resource.data.authorName.size() <= 100 &&
         request.resource.data.authorAvatar is string &&
         request.resource.data.text is string &&
-        request.resource.data.text.size() > 0 &&
         request.resource.data.text.size() <= 2000 &&
+        // Text-only, photo-only or text + photo (never an empty post).
+        (
+          request.resource.data.text.size() > 0 ||
+          (
+            request.resource.data.imageUrl is string &&
+            request.resource.data.imageUrl.size() > 0
+          )
+        ) &&
         request.resource.data.category in ['discussion', 'question', 'experience', 'story', 'photo'] &&
         (request.resource.data.imageUrl == null || request.resource.data.imageUrl is string) &&
         (request.resource.data.imagePath == null || request.resource.data.imagePath is string) &&
@@ -393,6 +400,56 @@ service cloud.firestore {
 
         allow delete: if isAdmin() ||
           (isGoldMember() && resource.data.authorUid == uid());
+      }
+    }
+
+    /* ---------------------------------------------------------------- *
+     * 💛 goldCircleDailyTopics — ONE featured topic per Nairobi day       *
+     *                                                                    *
+     * The topic text itself is deterministic (shared topic library), so  *
+     * only the vote tally lives here. Tally docs hold counts and never    *
+     * voter ids; each Gold member's own choice stays in a private         *
+     * subcollection vote only they can read.                             *
+     * ---------------------------------------------------------------- */
+
+    match /goldCircleDailyTopics/{dayKey} {
+      allow get, list: if isGoldMember() || isAdmin();
+
+      // First vote of the day: the tally is created in the same transaction
+      // as the voter's own private vote (proven by existsAfter below).
+      allow create: if isGoldMember() &&
+        request.resource.data.keys().hasOnly(['counts', 'sum', 'updatedAt']) &&
+        request.resource.data.counts is list &&
+        request.resource.data.counts.size() >= 2 &&
+        request.resource.data.counts.size() <= 3 &&
+        request.resource.data.sum == 1 &&
+        existsAfter(/databases/$(database)/documents/goldCircleDailyTopics/$(dayKey)/votes/$(uid()));
+
+      // Later votes: the tally total rises by exactly one and this member
+      // must not already have a vote for the day.
+      allow update: if isGoldMember() &&
+        request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['counts', 'sum', 'updatedAt']) &&
+        request.resource.data.counts.size() == resource.data.counts.size() &&
+        request.resource.data.sum == resource.data.sum + 1 &&
+        !exists(/databases/$(database)/documents/goldCircleDailyTopics/$(dayKey)/votes/$(uid())) &&
+        existsAfter(/databases/$(database)/documents/goldCircleDailyTopics/$(dayKey)/votes/$(uid()));
+
+      allow delete: if isAdmin();
+
+      // One private, immutable vote per Gold member per day. Nobody can read
+      // anyone else's vote, so the tally never leaks who voted for what.
+      match /votes/{voterUid} {
+        allow get: if isGoldMember() && voterUid == uid();
+
+        allow create: if isGoldMember() &&
+          request.auth.uid == voterUid &&
+          request.resource.data.keys().hasOnly(['option', 'createdAt']) &&
+          request.resource.data.option is int &&
+          request.resource.data.option >= 0 &&
+          request.resource.data.createdAt == request.time;
+
+        allow update, delete: if false;
       }
     }
 

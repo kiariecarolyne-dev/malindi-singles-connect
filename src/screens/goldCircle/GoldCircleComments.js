@@ -117,7 +117,7 @@ const GoldCircleComments = ({ post, onClose, onCountChange }) => {
       onLongPress={() => removeComment(item)}
       delayLongPress={350}
     >
-      <Avatar uri={item.authorAvatar} name={item.authorName} size={34} />
+      <Avatar uri={item.authorAvatar} name={item.authorName} size={32} />
       <View style={styles.rowBody}>
         <View style={styles.rowHead}>
           <Text style={styles.rowName} numberOfLines={1}>
@@ -134,9 +134,12 @@ const GoldCircleComments = ({ post, onClose, onCountChange }) => {
     <Modal visible animationType="slide" onRequestClose={onClose} transparent={false}>
       <View style={styles.wrap}>
         <View style={styles.header}>
-          <Text style={styles.title}>💬 Comments</Text>
+          <View style={styles.titleRow}>
+            <Ionicons name="chatbubble-outline" size={15} color={colors.gold} />
+            <Text style={styles.title}>Comments</Text>
+          </View>
           <TouchableOpacity onPress={onClose} style={styles.close} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
-            <Ionicons name="close" size={24} color={colors.text} />
+            <Ionicons name="close" size={22} color={colors.text} />
           </TouchableOpacity>
         </View>
 
@@ -211,7 +214,8 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: colors.border,
   },
-  title: { color: colors.text, fontSize: 17, fontWeight: '800' },
+  titleRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  title: { color: colors.text, fontSize: 16, fontWeight: '800' },
   close: { padding: spacing.xs },
 
   body: { flex: 1 },
@@ -246,21 +250,21 @@ const styles = StyleSheet.create({
   },
   input: {
     flex: 1,
-    minHeight: 44,
+    minHeight: 42,
     maxHeight: 120,
     backgroundColor: colors.background,
     borderRadius: radius.lg,
     borderWidth: 1,
     borderColor: colors.border,
     color: colors.text,
-    fontSize: 15,
+    fontSize: 14,
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
   },
   send: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
+    width: 42,
+    height: 42,
+    borderRadius: 21,
     backgroundColor: colors.gold,
     alignItems: 'center',
     justifyContent: 'center',

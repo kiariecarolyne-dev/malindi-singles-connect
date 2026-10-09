@@ -27,6 +27,7 @@ import {
   collection,
   deleteDoc,
   doc,
+  getDoc,
   getDocs,
   increment,
   limit as fsLimit,
@@ -47,13 +48,14 @@ import { fetchBlockedUids, fetchProfileDoc } from './deck';
 import * as premiumService from './premiumService';
 
 const POSTS = 'goldCirclePosts';
+const DAILY = 'goldCircleDailyTopics';
 
 /** Post categories shown in the composer and on every post. */
 export const CATEGORIES = [
   { id: 'discussion', label: 'Discussion', emoji: '💬' },
   { id: 'question', label: 'Question', emoji: '❓' },
   { id: 'experience', label: 'Dating experience', emoji: '💘' },
-  { id: 'story', label: 'Success Story', emoji: '💕' },
+  { id: 'story', label: 'Success Story', emoji: '🏆' },
   { id: 'photo', label: 'Photo', emoji: '📷' },
 ];
 
@@ -198,7 +200,16 @@ export const getComments = async (viewerUid, postId) => {
 export const createPost = async ({ uid, profile, text, category, image, whatsapp }) => {
   await assertGoldMember(uid);
 
-  const clean = cleanText(text, LIMITS.goldCirclePostMaxLength, 'post');
+  const hasImage = Boolean(image?.uri);
+  const trimmed = (text || '').trim();
+  // Text-only, photo-only and text + photo posts are all valid.
+  if (!trimmed && !hasImage) {
+    throw new Error('Write something or add a photo before you share.');
+  }
+  if (trimmed.length > LIMITS.goldCirclePostMaxLength) {
+    throw new Error(`Post is limited to ${LIMITS.goldCirclePostMaxLength} characters.`);
+  }
+  const clean = trimmed;
   const safeCategory = CATEGORY_IDS.includes(category) ? category : 'discussion';
   validateImage(image);
 
@@ -319,6 +330,64 @@ export const deleteComment = async (uid, postId, commentId) => {
 };
 
 /* ------------------------------------------------------------------ *
+ * Daily topic voting (one topic per Nairobi day)                      *
+ * ------------------------------------------------------------------ */
+
+/** Public tally for the day's topic (counts only — never who voted). */
+export const getDailyTally = async (dayKey) => {
+  try {
+    const snapshot = await getDoc(docRef(DAILY, dayKey));
+    const counts = snapshot.exists() ? snapshot.data().counts : null;
+    return Array.isArray(counts) ? counts : null;
+  } catch (error) {
+    throw new Error(friendlyError(error, "Could not load today's poll."));
+  }
+};
+
+/** The viewer's own private vote for the day (null when they have not voted). */
+export const getMyDailyVote = async (uid, dayKey) => {
+  try {
+    const snapshot = await getDoc(doc(getDb(), DAILY, dayKey, 'votes', uid));
+    return snapshot.exists() ? snapshot.data().option : null;
+  } catch (error) {
+    throw new Error(friendlyError(error, 'Could not load your vote.'));
+  }
+};
+
+/**
+ * Cast the once-per-day vote. The tally and the private vote are written in
+ * one transaction so `counts` always moves by exactly one and a member can
+ * never vote twice (the rules enforce the same guarantee server-side).
+ */
+export const voteDailyTopic = async ({ uid, dayKey, optionIndex }) => {
+  await assertGoldMember(uid);
+  if (!Number.isInteger(optionIndex) || optionIndex < 0) {
+    throw new Error('Choose one of the options first.');
+  }
+  const tallyRef = docRef(DAILY, dayKey);
+  const voteRef = doc(getDb(), DAILY, dayKey, 'votes', uid);
+  try {
+    await runTransaction(getDb(), async (transaction) => {
+      const mine = await transaction.get(voteRef);
+      if (mine.exists()) throw new Error('You have already voted today.');
+      const tally = await transaction.get(tallyRef);
+      const data = tally.exists() ? tally.data() : {};
+      const counts = Array.isArray(data.counts) ? [...data.counts] : [];
+      while (counts.length <= optionIndex) counts.push(0);
+      counts[optionIndex] += 1;
+      transaction.set(voteRef, { option: optionIndex, createdAt: serverTimestamp() });
+      transaction.set(tallyRef, {
+        counts,
+        sum: (Number(data.sum) || 0) + 1,
+        updatedAt: serverTimestamp(),
+      });
+    });
+  } catch (error) {
+    throw new Error(friendlyError(error, 'Could not save your vote.'));
+  }
+};
+
+/* ------------------------------------------------------------------ *
  * Moderation helpers (reporting/blocking reuse existing services)     *
  * ------------------------------------------------------------------ */
 
@@ -345,4 +414,7 @@ export default {
   addComment,
   deleteComment,
   deletePost,
+  getDailyTally,
+  getMyDailyVote,
+  voteDailyTopic,
 };

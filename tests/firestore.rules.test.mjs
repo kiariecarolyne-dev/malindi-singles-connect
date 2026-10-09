@@ -596,6 +596,76 @@ await allows('author deletes their own post', () =>
 );
 await allows('admin removes a post', () => goldAdmin.doc('goldCirclePosts/gpost1').delete());
 
+// --- one hot topic a day: private vote + Gold-only tally ------------------
+console.log('\n💛 gold circle daily topic (one hot topic a day)');
+const DAY = '2026-01-01';
+
+await allows('gold member reads the day tally (missing is fine)', () =>
+  goldAlice.doc(`goldCircleDailyTopics/${DAY}`).get(),
+);
+await denies('free member cannot read the day tally', () =>
+  goldCarol.doc(`goldCircleDailyTopics/${DAY}`).get(),
+);
+await denies('anonymous cannot read the day tally', () =>
+  asAnon().doc(`goldCircleDailyTopics/${DAY}`).get(),
+);
+
+await allows('first vote creates the tally + own private vote', () => {
+  const batch = goldAlice.batch();
+  batch.set(goldAlice.doc(`goldCircleDailyTopics/${DAY}`), {
+    counts: [1, 0], sum: 1, updatedAt: serverTimestamp(),
+  });
+  batch.set(goldAlice.doc(`goldCircleDailyTopics/${DAY}/votes/${ALICE}`), {
+    option: 0, createdAt: serverTimestamp(),
+  });
+  return batch.commit();
+});
+await denies('tally cannot be created without a private vote', () => {
+  const batch = goldDave.batch();
+  batch.set(goldDave.doc('goldCircleDailyTopics/2026-02-02'), {
+    counts: [1, 0], sum: 1, updatedAt: serverTimestamp(),
+  });
+  return batch.commit();
+});
+await denies('tally sum must be exactly 1 on creation', () => {
+  const batch = goldDave.batch();
+  batch.set(goldDave.doc('goldCircleDailyTopics/2026-03-03'), {
+    counts: [5, 0], sum: 5, updatedAt: serverTimestamp(),
+  });
+  batch.set(goldDave.doc('goldCircleDailyTopics/2026-03-03/votes/' + DAVE), {
+    option: 0, createdAt: serverTimestamp(),
+  });
+  return batch.commit();
+});
+await allows('second member votes and the tally grows by one', () => {
+  const batch = goldDave.batch();
+  batch.set(goldDave.doc(`goldCircleDailyTopics/${DAY}`), {
+    counts: [1, 1], sum: 2, updatedAt: serverTimestamp(),
+  });
+  batch.set(goldDave.doc(`goldCircleDailyTopics/${DAY}/votes/${DAVE}`), {
+    option: 1, createdAt: serverTimestamp(),
+  });
+  return batch.commit();
+});
+await denies('a member cannot vote twice', () => {
+  const batch = goldAlice.batch();
+  batch.set(goldAlice.doc(`goldCircleDailyTopics/${DAY}`), {
+    counts: [2, 1], sum: 3, updatedAt: serverTimestamp(),
+  });
+  return batch.commit();
+});
+await denies('a member cannot write someone elses vote', () =>
+  goldAlice.doc(`goldCircleDailyTopics/${DAY}/votes/${DAVE}`).set({
+    option: 0, createdAt: serverTimestamp(),
+  }),
+);
+await denies('a vote cannot be changed', () =>
+  goldAlice.doc(`goldCircleDailyTopics/${DAY}/votes/${ALICE}`).update({ option: 1 }),
+);
+await denies('a vote cannot be deleted', () =>
+  goldAlice.doc(`goldCircleDailyTopics/${DAY}/votes/${ALICE}`).delete(),
+);
+
 console.log(`\n${passed} passed, ${failed} failed`);
 await env.cleanup();
 process.exit(failed ? 1 : 0);

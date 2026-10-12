@@ -69,7 +69,13 @@ export const fetchMatchesFor = async (uid) => {
  * requires my own profile (gender reciprocity, age range, area group, blocks,
  * locked likers) is applied by the caller's filter.
  */
-export const collectCandidates = async ({ interestedInGender, filter, need = 12, maxDocs = 900 }) => {
+export const collectCandidates = async ({
+  interestedInGender,
+  filter,
+  need = 12,
+  maxDocs = 900,
+  onStats,
+}) => {
   if (!interestedInGender) return [];
   const results = [];
   let cursor = null;
@@ -99,6 +105,8 @@ export const collectCandidates = async ({ interestedInGender, filter, need = 12,
     cursor = snapshot.docs[snapshot.docs.length - 1];
     if (snapshot.size < CANDIDATE_BATCH) break;
   }
+
+  if (onStats) onStats({ scanned, matched: results.length });
 
   return results;
 };

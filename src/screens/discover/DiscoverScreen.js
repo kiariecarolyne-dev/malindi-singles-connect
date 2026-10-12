@@ -1,6 +1,14 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import {
+  ActivityIndicator,
+  Animated,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
+} from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
 
 import EmptyState from '../../components/EmptyState';
 import ErrorState from '../../components/ErrorState';
@@ -15,38 +23,74 @@ import { likeService, premiumService, profileService } from '../../services';
 import { compatibilityScore } from '../../utils/compatibility';
 import { haversineKm } from '../../utils/distance';
 import { colors, radius, spacing, gradients } from '../../theme';
-import { LinearGradient } from 'expo-linear-gradient';
+
+const REASON = profileService.DISCOVER_REASON || {};
+const INCOMPLETE = REASON.incompleteProfile || 'incomplete-profile';
+
+const EMPTY_INFO = { reason: REASON.ok || 'ok', missing: [], diagnostics: null };
+
+const dedupeByUid = (list) => {
+  const seen = new Set();
+  const out = [];
+  list.forEach((item) => {
+    if (!item || seen.has(item.uid)) return;
+    seen.add(item.uid);
+    out.push(item);
+  });
+  return out;
+};
 
 /**
- * The heart of the app: swipe/pass/like deck of nearby compatible singles.
+ * The heart of the app: a swipe deck of nearby compatible singles.
+ *
+ * The deck comes from `getDiscoverDeck`, which also reports *why* it is empty.
+ * An incomplete own profile (missing gender / who-you-want-to-meet) is shown
+ * as its own actionable state instead of the generic "you have seen everyone"
+ * — both used to be byte-identical empty screens.
  */
 const DiscoverScreen = ({ navigation }) => {
   const { user, profile } = useAuth();
-  const [deck, setDeck] = useState([]);
+  const [deckState, setDeckState] = useState({ items: [], key: 0, ...EMPTY_INFO });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [page, setPage] = useState(0);
   const [exhausted, setExhausted] = useState(false);
+  const [showDebug, setShowDebug] = useState(false);
   const [toast, setToast] = useState(null);
-  const [deckKey, setDeckKey] = useState(0);
-  const deckRef = useRef([]);
 
+  const deckRef = useRef([]);
+  const requestedPageRef = useRef(0);
+
+  const { items: deck, reason, missing, diagnostics } = deckState;
+  const { key: deckKey } = deckState;
   const isGold = premiumService.isGold(profile);
 
   const loadPage = useCallback(
     async (nextPage, append = false) => {
       if (!user?.uid) return;
+      requestedPageRef.current = append
+        ? Math.max(requestedPageRef.current, nextPage)
+        : nextPage;
       try {
-        const batch = await profileService.getDiscoverProfiles(user.uid, { page: nextPage });
-        setDeck((prev) => {
-          const next = append ? [...prev, ...batch] : batch;
-          deckRef.current = next;
-          return next;
+        const result = await profileService.getDiscoverDeck(user.uid, { page: nextPage });
+        const batch = result?.profiles || [];
+        if (__DEV__) {
+          console.log('[Discover]', result?.reason, result?.diagnostics);
+        }
+        setDeckState((prev) => {
+          const nextItems = append ? dedupeByUid([...prev.items, ...batch]) : batch;
+          deckRef.current = nextItems;
+          return {
+            items: nextItems,
+            key: append ? prev.key : prev.key + 1,
+            reason: result?.reason || REASON.ok || 'ok',
+            missing: result?.missing || [],
+            diagnostics: result?.diagnostics || null,
+          };
         });
         setPage(nextPage);
         setExhausted(batch.length < LIMITS.discoverPageSize);
         setError(null);
-        if (!append) setDeckKey((k) => k + 1);
       } catch (e) {
         setError(e.message || 'Could not load profiles right now.');
       } finally {
@@ -68,8 +112,9 @@ const DiscoverScreen = ({ navigation }) => {
   const handleIndexChange = useCallback(
     (index) => {
       const remaining = deckRef.current.length - index;
-      if (!exhausted && remaining > 0 && remaining <= 3) {
-        loadPage(page + 1, true);
+      const nextPage = page + 1;
+      if (!exhausted && remaining > 0 && remaining <= 3 && nextPage > requestedPageRef.current) {
+        loadPage(nextPage, true);
       }
     },
     [exhausted, loadPage, page],
@@ -99,12 +144,18 @@ const DiscoverScreen = ({ navigation }) => {
     }
   };
 
+  const retry = () => {
+    requestedPageRef.current = 0;
+    setLoading(true);
+    loadPage(0);
+  };
+
   const distanceFor = (p) => {
     if (p.showLocation === false || !p.location || !profile?.location) return null;
     return haversineKm(profile.location.lat, profile.location.lng, p.location.lat, p.location.lng);
   };
 
-  const renderCard = (cardProfile, direction) => (
+  const renderCard = (cardProfile, direction, stamps) => (
     <View style={styles.cardHost}>
       <ProfileCard
         profile={cardProfile}
@@ -116,15 +167,21 @@ const DiscoverScreen = ({ navigation }) => {
         activeOpacity={0.9}
         onPress={() => navigation.navigate('ProfileDetail', { uid: cardProfile.uid })}
       />
-      {direction === 'right' ? (
-        <View style={[styles.stamp, styles.stampLike]}>
-          <Text style={[styles.stampText, { color: colors.primary }]}>LIKE</Text>
-        </View>
-      ) : null}
-      {direction === 'left' ? (
-        <View style={[styles.stamp, styles.stampPass]}>
-          <Text style={[styles.stampText, { color: colors.textSecondary }]}>PASS</Text>
-        </View>
+      {stamps ? (
+        <>
+          <Animated.View
+            pointerEvents="none"
+            style={[styles.stamp, styles.stampLike, { opacity: stamps.like }]}
+          >
+            <Text style={[styles.stampText, { color: colors.success }]}>LIKE</Text>
+          </Animated.View>
+          <Animated.View
+            pointerEvents="none"
+            style={[styles.stamp, styles.stampPass, { opacity: stamps.nope }]}
+          >
+            <Text style={[styles.stampText, { color: colors.danger }]}>NOPE</Text>
+          </Animated.View>
+        </>
       ) : null}
     </View>
   );
@@ -136,8 +193,10 @@ const DiscoverScreen = ({ navigation }) => {
         onPress={() => swipe('left')}
         disabled={disabled}
         activeOpacity={0.8}
+        accessibilityRole="button"
+        accessibilityLabel="Pass"
       >
-        <Ionicons name="close" size={30} color={colors.textSecondary} />
+        <Ionicons name="close" size={32} color={colors.textSecondary} />
       </TouchableOpacity>
 
       <TouchableOpacity
@@ -145,6 +204,8 @@ const DiscoverScreen = ({ navigation }) => {
         onPress={() => currentProfile && navigation.navigate('ProfileDetail', { uid: currentProfile.uid })}
         disabled={disabled}
         activeOpacity={0.8}
+        accessibilityRole="button"
+        accessibilityLabel="View full profile"
       >
         <Ionicons name="information" size={22} color={colors.info} />
       </TouchableOpacity>
@@ -154,11 +215,77 @@ const DiscoverScreen = ({ navigation }) => {
         onPress={() => swipe('right')}
         disabled={disabled}
         activeOpacity={0.8}
+        accessibilityRole="button"
+        accessibilityLabel="Like"
       >
-        <Ionicons name="heart" size={30} color={colors.white} />
+        <LinearGradient
+          colors={gradients.primary}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={styles.likeGradient}
+        >
+          <Ionicons name="heart" size={30} color={colors.white} />
+        </LinearGradient>
       </TouchableOpacity>
     </View>
   );
+
+  const renderBody = () => {
+    if (loading) {
+      return (
+        <View style={styles.loadingWrap}>
+          <CardSkeleton />
+          <View style={styles.loadingRow}>
+            <ActivityIndicator color={colors.primary} />
+            <Text style={styles.loadingText}>Finding singles around Malindi…</Text>
+          </View>
+        </View>
+      );
+    }
+
+    if (error) {
+      return <ErrorState message={error} onRetry={retry} />;
+    }
+
+    if (reason === INCOMPLETE) {
+      const labels = missing.map((field) => MISSING_LABELS[field] || field);
+      return (
+        <EmptyState
+          emoji="🪪"
+          title="Finish your profile to see matches"
+          message={`We can only match you once we know ${labels.join(
+            ' and ',
+          )}. Add it to your profile and your deck will fill up.`}
+          actionLabel="Go to my profile"
+          onAction={() => navigation.navigate('Profile')}
+        />
+      );
+    }
+
+    if (deck.length === 0) {
+      return (
+        <EmptyState
+          emoji="🌅"
+          title="You have seen everyone for now"
+          message="New singles join every day. Meanwhile, try Quick Match or see who is active right now around Malindi."
+          actionLabel="⚡ Try Quick Match"
+          onAction={() => navigation.navigate('Active')}
+        />
+      );
+    }
+
+    return (
+      <SwipeDeck
+        key={deckKey}
+        profiles={deck}
+        onLike={handleLike}
+        onPass={handlePass}
+        onIndexChange={handleIndexChange}
+        renderCard={renderCard}
+        actions={renderActions}
+      />
+    );
+  };
 
   return (
     <Screen edges={['top']}>
@@ -166,29 +293,39 @@ const DiscoverScreen = ({ navigation }) => {
         <View style={styles.headerText}>
           <Text style={styles.title}>Discover</Text>
           <Text style={styles.subtitle}>
-            ❤️ Singles around {getAreaLabel(profile?.area)} · tap a card for full profile
+            ❤️ Singles around {getAreaLabel(profile?.area)} · tap a card for the full profile
           </Text>
         </View>
+        {__DEV__ ? (
+          <TouchableOpacity
+            style={[styles.iconBtn, showDebug && styles.iconBtnActive]}
+            onPress={() => setShowDebug((v) => !v)}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            accessibilityRole="button"
+            accessibilityLabel="Toggle discovery diagnostics"
+          >
+            <Ionicons name="bug" size={18} color={showDebug ? colors.primary : colors.textSecondary} />
+          </TouchableOpacity>
+        ) : null}
         <TouchableOpacity
-          style={styles.refreshBtn}
-          onPress={() => {
-            setLoading(true);
-            loadPage(0);
-          }}
+          style={styles.iconBtn}
+          onPress={retry}
           hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          accessibilityRole="button"
+          accessibilityLabel="Refresh deck"
         >
           <Ionicons name="refresh" size={20} color={colors.textSecondary} />
         </TouchableOpacity>
       </View>
 
       {isGold ? (
-        <View style={styles.goldBannerActive}>
-          <Ionicons name="checkmark-circle" size={18} color={colors.gold} />
-          <Text style={styles.goldBannerActiveText}>✓ Malindi Gold Active</Text>
+        <View style={styles.goldActive}>
+          <Ionicons name="checkmark-circle" size={16} color={colors.gold} />
+          <Text style={styles.goldActiveText}>Malindi Gold active — see everyone who likes you</Text>
         </View>
       ) : (
         <TouchableOpacity
-          style={styles.goldBanner}
+          style={styles.goldStrip}
           activeOpacity={0.9}
           onPress={() => navigation.navigate('Premium')}
           accessibilityRole="button"
@@ -197,105 +334,48 @@ const DiscoverScreen = ({ navigation }) => {
           <LinearGradient
             colors={gradients.gold}
             start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 1 }}
-            style={styles.goldBannerGradient}
+            end={{ x: 1, y: 0 }}
+            style={styles.goldStripInner}
           >
-            <View style={styles.goldBannerLeft}>
-              <Text style={styles.goldBannerTitle}>✨ MALINDI GOLD</Text>
-              <Text style={styles.goldBannerSub}>See who likes you. Unlock more connections.</Text>
-              <Text style={styles.goldBannerMeta}>KSh 100 • One-time payment</Text>
+            <Ionicons name="sparkles" size={16} color={colors.black} />
+            <View style={styles.goldStripText}>
+              <Text style={styles.goldStripTitle}>MALINDI GOLD</Text>
+              <Text style={styles.goldStripSub} numberOfLines={1}>
+                See who likes you · KSh 100
+              </Text>
             </View>
-            <View style={styles.goldBannerRight}>
-              <View style={styles.goldBannerCta}>
-                <Text style={styles.goldBannerCtaText}>Unlock Gold</Text>
-                <Ionicons name="chevron-forward" size={16} color={colors.black} />
-              </View>
+            <View style={styles.goldStripCta}>
+              <Text style={styles.goldStripCtaText}>Unlock</Text>
+              <Ionicons name="chevron-forward" size={14} color={colors.black} />
             </View>
           </LinearGradient>
         </TouchableOpacity>
       )}
 
-      {/* 💛 Gold Circle promo — same premium ecosystem, routes through the
-          existing GoldCircle screen which applies the Gold gate itself. */}
       <TouchableOpacity
-        style={styles.circleBanner}
+        style={styles.circleStrip}
         activeOpacity={0.9}
         onPress={() => navigation.navigate('GoldCircle')}
         accessibilityRole="button"
         accessibilityLabel="Explore Gold Circle"
       >
-        <View style={styles.circleBannerInner}>
-          <View style={styles.circleHeadRow}>
-            <Text style={styles.circleTitle}>💛 GOLD CIRCLE</Text>
-            <Ionicons name="chatbubbles-outline" size={16} color={colors.gold} />
-          </View>
-          <Text style={styles.circleTagline}>More than matching. Be part of the conversation.</Text>
-          <Text style={styles.circleBody} numberOfLines={2}>
-            Join an exclusive community where Gold members share dating experiences, relationship
-            conversations, photos, questions and success stories.
+        <Ionicons name="chatbubbles" size={16} color={colors.gold} />
+        <View style={styles.circleStripText}>
+          <Text style={styles.circleStripTitle} numberOfLines={1}>
+            💛 GOLD CIRCLE
           </Text>
-
-          <View style={styles.circleFooter}>
-            <View style={styles.circleStatusWrap}>
-              <Text style={[styles.circleStatus, isGold && styles.circleStatusGold]}>
-                {isGold ? '✓ You’re a Gold Member' : '🔒 Gold Members Only'}
-              </Text>
-              {!isGold ? (
-                <Text style={styles.circleStatusHint}>Unlock Malindi Gold to enter Gold Circle</Text>
-              ) : null}
-            </View>
-            <LinearGradient
-              colors={gradients.gold}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 1 }}
-              style={styles.circleCta}
-            >
-              <Text style={styles.circleCtaText}>
-                {isGold ? 'Enter Gold Circle' : 'Explore Gold Circle'}
-              </Text>
-              <Ionicons name="chevron-forward" size={15} color={colors.black} />
-            </LinearGradient>
-          </View>
+          <Text style={styles.circleStripSub} numberOfLines={1}>
+            {isGold ? 'You’re a Gold member — join the conversation' : 'Premium community for Gold members'}
+          </Text>
         </View>
+        <Text style={styles.circleStripCta}>{isGold ? 'Enter' : '🔒 Explore'}</Text>
       </TouchableOpacity>
 
-      <View style={styles.body}>
-        {loading ? (
-          <View style={styles.loadingWrap}>
-            <CardSkeleton />
-            <View style={styles.loadingRow}>
-              <ActivityIndicator color={colors.primary} />
-              <Text style={styles.loadingText}>Finding singles around Malindi…</Text>
-            </View>
-          </View>
-        ) : error ? (
-          <ErrorState
-            message={error}
-            onRetry={() => {
-              setLoading(true);
-              loadPage(0);
-            }}
-          />
-        ) : deck.length === 0 ? (
-          <EmptyState
-            emoji="🌅"
-            title="You have seen everyone for now"
-            message="New singles join every day. Meanwhile, try Quick Match or see who is active right now around Malindi."
-            actionLabel="⚡ Try Quick Match"
-            onAction={() => navigation.navigate('Active')}
-          />
-        ) : (
-          <SwipeDeck
-            key={deckKey}
-            profiles={deck}
-            onLike={handleLike}
-            onPass={handlePass}
-            onIndexChange={handleIndexChange}
-            renderCard={renderCard}
-            actions={renderActions}
-          />
-        )}
-      </View>
+      {__DEV__ && showDebug ? (
+        <DiagnosticsPanel reason={reason} diagnostics={diagnostics} missing={missing} />
+      ) : null}
+
+      <View style={styles.body}>{renderBody()}</View>
 
       {toast ? (
         <View style={[styles.toast, toast.tone === 'error' && styles.toastError]}>
@@ -306,83 +386,103 @@ const DiscoverScreen = ({ navigation }) => {
   );
 };
 
+const MISSING_LABELS = {
+  gender: 'your gender',
+  interestedIn: 'who you want to meet',
+  profile: 'a completed profile',
+};
+
+/** Dev-only panel: shows exactly where the discovery pipeline lost members. */
+const DiagnosticsPanel = ({ reason, diagnostics, missing }) => {
+  const dropped = diagnostics?.dropped || {};
+  const rows = [
+    ['reason', reason],
+    ['my gender', diagnostics?.myGender ?? '—'],
+    ['my interestedIn', (diagnostics?.myInterestedIn || []).join(', ') || '—'],
+    ['my age range', (diagnostics?.myAgeRange || []).join('–') || '—'],
+    ['profiles scanned', diagnostics?.scanned ?? '—'],
+    ['matched', diagnostics?.matched ?? '—'],
+    ['already seen', dropped.alreadySeen ?? '—'],
+    ['blocked / hidden', dropped.blockedOrHidden ?? '—'],
+    ['suspended', dropped.suspended ?? '—'],
+    ['not my type', dropped.notMyType ?? '—'],
+    ['not reciprocal', dropped.notReciprocal ?? '—'],
+    ['missing age', dropped.missingAge ?? '—'],
+    ['out of age range', dropped.outOfAgeRange ?? '—'],
+  ];
+  return (
+    <View style={styles.debug}>
+      <Text style={styles.debugTitle}>Discovery diagnostics (dev)</Text>
+      {missing?.length ? <Text style={styles.debugMissing}>missing: {missing.join(', ')}</Text> : null}
+      {rows.map(([label, value]) => (
+        <View key={label} style={styles.debugRow}>
+          <Text style={styles.debugKey}>{label}</Text>
+          <Text style={styles.debugValue}>{String(value)}</Text>
+        </View>
+      ))}
+      <Text style={styles.debugHint}>
+        “missing age” means a profile has neither age nor dateOfBirth; “not my type” means the
+        member’s gender is outside your “who you want to meet”.
+      </Text>
+    </View>
+  );
+};
+
 const styles = StyleSheet.create({
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: spacing.lg,
-    paddingTop: spacing.md,
+    paddingTop: spacing.sm,
     paddingBottom: spacing.sm,
   },
-  headerText: { flex: 1, paddingRight: spacing.md },
+  headerText: { flex: 1, paddingRight: spacing.sm },
   title: { color: colors.text, fontSize: 26, fontWeight: '900' },
   subtitle: { color: colors.textSecondary, fontSize: 12, marginTop: 2 },
-  refreshBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+  iconBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
     backgroundColor: colors.surface,
     borderWidth: 1,
     borderColor: colors.border,
     alignItems: 'center',
     justifyContent: 'center',
+    marginLeft: spacing.sm,
   },
+  iconBtnActive: { borderColor: colors.primary },
   body: { flex: 1 },
 
-  goldBanner: {
+  goldStrip: {
     marginHorizontal: spacing.lg,
     marginBottom: spacing.sm,
     borderRadius: radius.lg,
     overflow: 'hidden',
   },
-  goldBannerGradient: {
+  goldStripInner: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.md,
-    gap: spacing.md,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    gap: spacing.sm,
   },
-  goldBannerLeft: { flex: 1 },
-  goldBannerTitle: {
-    color: colors.black,
-    fontSize: 13,
-    fontWeight: '900',
-    letterSpacing: 1,
-    marginBottom: 2,
-  },
-  goldBannerSub: {
-    color: 'rgba(0,0,0,0.8)',
-    fontSize: 12,
-    fontWeight: '800',
-    lineHeight: 17,
-  },
-  goldBannerMeta: {
-    color: 'rgba(0,0,0,0.7)',
-    fontSize: 11,
-    fontWeight: '700',
-    marginTop: 2,
-  },
-  goldBannerRight: { alignItems: 'flex-end' },
-  goldBannerCta: {
+  goldStripText: { flex: 1 },
+  goldStripTitle: { color: colors.black, fontSize: 12, fontWeight: '900', letterSpacing: 1 },
+  goldStripSub: { color: 'rgba(0,0,0,0.72)', fontSize: 11, fontWeight: '700', marginTop: 1 },
+  goldStripCta: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
+    gap: 2,
     backgroundColor: 'rgba(255,255,255,0.55)',
     paddingHorizontal: spacing.md,
-    paddingVertical: 6,
+    paddingVertical: 5,
     borderRadius: radius.round,
   },
-  goldBannerCtaText: {
-    color: colors.black,
-    fontSize: 12,
-    fontWeight: '900',
-  },
-  goldBannerActive: {
+  goldStripCtaText: { color: colors.black, fontSize: 11, fontWeight: '900' },
+  goldActive: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
     gap: 6,
     marginHorizontal: spacing.lg,
     marginBottom: spacing.sm,
@@ -391,66 +491,58 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.gold,
     paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
   },
-  goldBannerActiveText: {
-    color: colors.gold,
-    fontSize: 12,
-    fontWeight: '800',
-    letterSpacing: 0.5,
-  },
+  goldActiveText: { color: colors.gold, fontSize: 12, fontWeight: '800', flex: 1 },
 
-  circleBanner: {
+  circleStrip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
     marginHorizontal: spacing.lg,
     marginBottom: spacing.sm,
     borderRadius: radius.lg,
     borderWidth: 1,
     borderColor: colors.gold,
     backgroundColor: colors.surface,
-    overflow: 'hidden',
-  },
-  circleBannerInner: { paddingHorizontal: spacing.md, paddingVertical: spacing.sm, gap: 3 },
-  circleHeadRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  circleTitle: { color: colors.gold, fontSize: 13, fontWeight: '900', letterSpacing: 1 },
-  circleTagline: { color: colors.text, fontSize: 13, fontWeight: '800' },
-  circleBody: { color: colors.textSecondary, fontSize: 12, lineHeight: 17 },
-  circleFooter: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: spacing.md,
-    marginTop: spacing.xs,
-  },
-  circleStatusWrap: { flex: 1 },
-  circleStatus: { color: colors.textMuted, fontSize: 11, fontWeight: '800' },
-  circleStatusGold: { color: colors.gold },
-  circleStatusHint: { color: colors.textMuted, fontSize: 11, fontWeight: '600', marginTop: 1 },
-  circleCta: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
     paddingHorizontal: spacing.md,
-    paddingVertical: 7,
-    borderRadius: radius.round,
+    paddingVertical: spacing.sm,
   },
-  circleCtaText: { color: colors.black, fontSize: 12, fontWeight: '900' },
+  circleStripText: { flex: 1 },
+  circleStripTitle: { color: colors.gold, fontSize: 12, fontWeight: '900', letterSpacing: 0.5 },
+  circleStripSub: { color: colors.textSecondary, fontSize: 11, marginTop: 1 },
+  circleStripCta: { color: colors.gold, fontSize: 12, fontWeight: '900' },
+
+  debug: {
+    marginHorizontal: spacing.lg,
+    marginBottom: spacing.sm,
+    padding: spacing.md,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.borderStrong,
+    backgroundColor: colors.backgroundAlt,
+  },
+  debugTitle: { color: colors.primary, fontSize: 12, fontWeight: '900', marginBottom: spacing.xs },
+  debugMissing: { color: colors.danger, fontSize: 11, fontWeight: '700', marginBottom: spacing.xs },
+  debugRow: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 1 },
+  debugKey: { color: colors.textMuted, fontSize: 11 },
+  debugValue: { color: colors.text, fontSize: 11, fontWeight: '700' },
+  debugHint: { color: colors.textMuted, fontSize: 10, lineHeight: 14, marginTop: spacing.xs },
+
   cardHost: { flex: 1 },
   cardTouch: { ...StyleSheet.absoluteFillObject, backgroundColor: 'transparent' },
   stamp: {
     position: 'absolute',
-    top: 90,
+    top: 96,
     paddingHorizontal: spacing.lg,
     paddingVertical: spacing.sm,
     borderRadius: radius.md,
     borderWidth: 3,
-    opacity: 0.92,
   },
-  stampLike: { left: 24, borderColor: colors.primary, transform: [{ rotate: '-14deg' }] },
-  stampPass: { right: 24, borderColor: colors.textSecondary, transform: [{ rotate: '14deg' }] },
+  stampLike: { left: 24, borderColor: colors.success, transform: [{ rotate: '-14deg' }] },
+  stampPass: { right: 24, borderColor: colors.danger, transform: [{ rotate: '14deg' }] },
   stampText: { fontSize: 26, fontWeight: '900', letterSpacing: 2 },
+
   actionRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -469,13 +561,15 @@ const styles = StyleSheet.create({
     shadowRadius: 10,
     shadowOffset: { width: 0, height: 6 },
     elevation: 8,
+    overflow: 'hidden',
   },
-  passBtn: { backgroundColor: colors.surfaceLight, borderWidth: 2, borderColor: colors.borderStrong },
   likeBtn: { backgroundColor: colors.primary },
+  likeGradient: { width: '100%', height: '100%', alignItems: 'center', justifyContent: 'center' },
+  passBtn: { backgroundColor: colors.surfaceLight, borderWidth: 2, borderColor: colors.borderStrong },
   infoBtn: {
-    width: 46,
-    height: 46,
-    borderRadius: 23,
+    width: 48,
+    height: 48,
+    borderRadius: 24,
     backgroundColor: 'rgba(77,163,255,0.15)',
     borderWidth: 1,
     borderColor: 'rgba(77,163,255,0.4)',
@@ -483,7 +577,8 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   actionDisabled: { opacity: 0.4 },
-  loadingWrap: { flex: 1, paddingTop: spacing.xl },
+
+  loadingWrap: { flex: 1, paddingTop: spacing.lg },
   loadingRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', marginTop: spacing.xl },
   loadingText: { color: colors.textSecondary, fontSize: 13, marginLeft: spacing.md },
   toast: {

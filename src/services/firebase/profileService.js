@@ -307,13 +307,53 @@ const isVisible = (profile, me) => {
   return true;
 };
 
+/** Why the discovery deck came back the way it did. */
+export const DISCOVER_REASON = {
+  ok: 'ok',
+  empty: 'empty',
+  incompleteProfile: 'incomplete-profile',
+  noProfile: 'no-profile',
+};
+
 /**
  * Discover deck — paginated, respects gender interest + age preferences.
  * Malindi / Watamu / surrounding members from your own area group come first.
+ *
+ * Returns the deck **and** the reason it is empty. Before this, a viewer whose
+ * own profile was missing `gender` / `interestedIn` — or who simply had no
+ * eligible candidates — both produced an identical empty array, so the screen
+ * always claimed "you have seen everyone" with no way to tell the two apart.
+ * `getDiscoverDeck` makes the failure mode explicit (see `DISCOVER_REASON`).
  */
-export const getDiscoverProfiles = async (myUid, { page = 0 } = {}) => {
+export const getDiscoverDeck = async (myUid, { page = 0 } = {}) => {
   const me = await fetchProfileDoc(myUid);
-  if (!me) return [];
+  if (!me) {
+    return {
+      profiles: [],
+      reason: DISCOVER_REASON.noProfile,
+      missing: ['profile'],
+      diagnostics: { reason: DISCOVER_REASON.noProfile, myUid: myUid || null },
+    };
+  }
+
+  const missing = [];
+  if (!me.gender) missing.push('gender');
+  if (!Array.isArray(me.interestedIn) || me.interestedIn.length === 0) missing.push('interestedIn');
+  if (missing.length) {
+    // The server query is `interestedIn array-contains me.gender`; without either
+    // field every possible candidate is filtered out before the deck is built.
+    return {
+      profiles: [],
+      reason: DISCOVER_REASON.incompleteProfile,
+      missing,
+      diagnostics: {
+        reason: DISCOVER_REASON.incompleteProfile,
+        missing,
+        myGender: me.gender || null,
+        myInterestedIn: me.interestedIn || [],
+      },
+    };
+  }
 
   const [excludedTargets, blocked, hiddenLikers] = await Promise.all([
     fetchOutgoingTargets(myUid),
@@ -321,22 +361,63 @@ export const getDiscoverProfiles = async (myUid, { page = 0 } = {}) => {
     // 🔒 a locked incoming like must never be discoverable until Gold or a match
     premiumService.getHiddenLikerUids(myUid),
   ]);
-  const excluded = new Set([myUid, ...excludedTargets, ...blocked, ...hiddenLikers]);
 
   const pageSize = LIMITS.discoverPageSize;
   const needed = page * pageSize + pageSize;
+  const minAge = me.preferences?.minAge || 18;
+  const maxAge = me.preferences?.maxAge || 99;
+
+  const dropped = {
+    alreadySeen: 0,
+    blockedOrHidden: 0,
+    suspended: 0,
+    notMyType: 0,
+    notReciprocal: 0,
+    missingAge: 0,
+    outOfAgeRange: 0,
+  };
+  const stats = { scanned: 0, matched: 0 };
 
   const candidates = await collectCandidates({
     interestedInGender: me.gender,
     need: needed,
-    filter: (profile) =>
-      !excluded.has(profile.uid) &&
-      !profile.suspended &&
-      (me.interestedIn || []).includes(profile.gender) &&
-      (profile.interestedIn || []).includes(me.gender) &&
-      profileAge(profile) >= (me.preferences?.minAge || 18) &&
-      profileAge(profile) <= (me.preferences?.maxAge || 99) &&
-      isVisible(profile, me),
+    onStats: (s) => Object.assign(stats, s),
+    filter: (profile) => {
+      if (profile.uid === myUid || excludedTargets.has(profile.uid)) {
+        dropped.alreadySeen += 1;
+        return false;
+      }
+      if (blocked.has(profile.uid) || hiddenLikers.has(profile.uid)) {
+        dropped.blockedOrHidden += 1;
+        return false;
+      }
+      if (profile.suspended) {
+        dropped.suspended += 1;
+        return false;
+      }
+      if (!(me.interestedIn || []).includes(profile.gender)) {
+        dropped.notMyType += 1;
+        return false;
+      }
+      if (!(profile.interestedIn || []).includes(me.gender)) {
+        dropped.notReciprocal += 1;
+        return false;
+      }
+      const age = profileAge(profile);
+      if (age <= 0) {
+        dropped.missingAge += 1;
+        return false;
+      }
+      if (age < minAge || age > maxAge) {
+        dropped.outOfAgeRange += 1;
+        return false;
+      }
+      if (!isVisible(profile, me)) {
+        dropped.blockedOrHidden += 1;
+        return false;
+      }
+      return true;
+    },
   });
 
   // Malindi-focused ordering: own Malindi / Watamu / surrounding group first.
@@ -347,8 +428,27 @@ export const getDiscoverProfiles = async (myUid, { page = 0 } = {}) => {
   );
 
   const start = page * pageSize;
-  return candidates.slice(start, start + pageSize);
+  const profiles = candidates.slice(start, start + pageSize);
+
+  return {
+    profiles,
+    reason: candidates.length ? DISCOVER_REASON.ok : DISCOVER_REASON.empty,
+    missing: [],
+    diagnostics: {
+      reason: candidates.length ? DISCOVER_REASON.ok : DISCOVER_REASON.empty,
+      myGender: me.gender,
+      myInterestedIn: me.interestedIn || [],
+      myAgeRange: [minAge, maxAge],
+      scanned: stats.scanned,
+      matched: stats.matched,
+      dropped,
+    },
+  };
 };
+
+/** Array-only wrapper — kept for callers that don't need the empty reason. */
+export const getDiscoverProfiles = async (myUid, options) =>
+  (await getDiscoverDeck(myUid, options)).profiles;
 
 /** Singles near you — approximate distance only, respects location toggle. */
 export const getNearbyProfiles = async (myUid, take = 8) => {
@@ -522,6 +622,8 @@ export default {
   updateProfile,
   touchActivity,
   getDiscoverProfiles,
+  getDiscoverDeck,
+  DISCOVER_REASON,
   getNearbyProfiles,
   getActiveProfiles,
   getLikedYouProfiles,

@@ -23,6 +23,13 @@ export const matchDocId = (uidA, uidB) => `match_${pairKey(uidA, uidB)}`;
 export const conversationDocId = (uidA, uidB) => `conv_${pairKey(uidA, uidB)}`;
 export const blockDocId = (uidA, uidB) => `block_${pairKey(uidA, uidB)}`;
 
+/**
+ * Directional pass id — NOT sorted, unlike every other pair id. A pass must
+ * be able to coexist with the other person's like, so `A → B` and `B → A`
+ * are two distinct documents. Keep the stored `fromUid`/`toUid` in lockstep.
+ */
+export const passDocId = (fromUid, toUid) => `pass_${fromUid}__${toUid}`;
+
 /** `col('likes')` / `docRef('likes', id)` — always bound to the live Firestore instance. */
 export const col = (name) => collection(getDb(), name);
 
@@ -119,6 +126,7 @@ export default {
   matchDocId,
   conversationDocId,
   blockDocId,
+  passDocId,
   toIso,
   docToModel,
   docsToModels,

@@ -18,8 +18,9 @@ import { timeAgo } from '../../utils/time';
 
 const TABS = ['Overview', 'Reports', 'Verifications'];
 
-const AdminScreen = () => {
+const AdminScreen = ({ navigation }) => {
   const { isAdmin, user } = useAuth();
+  const goBack = navigation?.canGoBack?.() ? () => navigation.goBack() : undefined;
   const [tab, setTab] = useState('Overview');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -136,7 +137,7 @@ const AdminScreen = () => {
   if (!isAdmin) {
     return (
       <Screen edges={['top']}>
-        <ScreenHeader title="Admin" />
+        <ScreenHeader title="Admin" onBack={goBack} />
         <EmptyState
           emoji="🔒"
           title="Admins only"
@@ -160,7 +161,7 @@ const AdminScreen = () => {
 
   return (
     <Screen edges={['top']}>
-      <ScreenHeader title="Admin Moderation" subtitle="Demo admin console" />
+      <ScreenHeader title="Admin Moderation" subtitle="Demo admin console" onBack={goBack} />
 
       <View style={styles.tabs}>
         {TABS.map((t) => {

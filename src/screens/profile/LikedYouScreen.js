@@ -172,9 +172,9 @@ const LikedYouScreen = ({ navigation }) => {
         <EmptyState
           emoji="💘"
           title="No likes waiting"
-          message="When someone likes you they show up here — often before they appear in Discover."
-          actionLabel="Back to Discover"
-          onAction={() => navigation.navigate('MainTabs', { screen: 'Discover' })}
+          message="When someone likes you they show up here — often before they appear in Active."
+          actionLabel="Browse singles"
+          onAction={() => navigation.navigate('MainTabs', { screen: 'Active' })}
         />
       ) : (
         <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>

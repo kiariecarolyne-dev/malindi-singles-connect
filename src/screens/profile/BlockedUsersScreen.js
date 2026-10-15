@@ -62,7 +62,7 @@ const BlockedUsersScreen = ({ navigation }) => {
       ) : (
         <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
           <Text style={styles.hint}>
-            Blocked people cannot see you, message you or appear in Discover. Unblock any time.
+            Blocked people cannot see you, message you or appear in Active. Unblock any time.
           </Text>
           {blocked.map((p) => (
             <View key={p.uid} style={styles.row}>

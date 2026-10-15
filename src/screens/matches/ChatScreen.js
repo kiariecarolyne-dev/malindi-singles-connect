@@ -14,6 +14,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import Avatar from '../../components/Avatar';
 import EmptyState from '../../components/EmptyState';
@@ -72,9 +73,9 @@ const TypingBubble = ({ name }) => {
 
 const ChatScreen = ({ navigation, route }) => {
   const { user } = useAuth();
+  const insets = useSafeAreaInsets();
   const conversationId = route?.params?.conversationId;
   const otherUid = route?.params?.otherUid;
-  const matchId = route?.params?.matchId;
 
   const [other, setOther] = useState(null);
   const [messages, setMessages] = useState([]);
@@ -279,7 +280,7 @@ const ChatScreen = ({ navigation, route }) => {
 
       <KeyboardAvoidingView
         style={styles.kav}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        behavior="padding"
         keyboardVerticalOffset={0}
       >
         {loading ? (
@@ -330,7 +331,7 @@ const ChatScreen = ({ navigation, route }) => {
           </ScrollView>
         ) : null}
 
-        <View style={styles.composer}>
+        <View style={[styles.composer, { paddingBottom: spacing.sm + insets.bottom }]}>
           <TouchableOpacity
             style={styles.composerIcon}
             onPress={() => setShowEmojis((v) => !v)}
@@ -371,8 +372,6 @@ const ChatScreen = ({ navigation, route }) => {
             </LinearGradient>
           </TouchableOpacity>
         </View>
-
-        {matchId ? null : <View style={styles.bottomInset} />}
       </KeyboardAvoidingView>
     </Screen>
   );
@@ -491,7 +490,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  bottomInset: { height: spacing.md },
 });
 
 export default ChatScreen;

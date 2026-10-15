@@ -161,8 +161,8 @@ const MeetScreen = ({ navigation }) => {
                   emoji="🗓️"
                   title="No matches to meet yet"
                   message="When you match with someone, plan a public meetup right here."
-                  actionLabel="Go to Discover"
-                  onAction={() => navigation.navigate('Discover')}
+                  actionLabel="Browse singles"
+                  onAction={() => navigation.navigate('Active')}
                 />
               )}
             </View>

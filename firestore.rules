@@ -285,6 +285,37 @@ service cloud.firestore {
     }
 
     /* ---------------------------------------------------------------- *
+     * passes/{pass_{from}__{to}}                                         *
+     *                                                                    *
+     * A permanent, DIRECTIONAL "no". Deliberately separate from `likes`:  *
+     * one pair shares a single like document, so a recipient's pass must  *
+     * live in its own document with an explicit direction (`fromUid ->    *
+     * toUid`, never sorted) so it can coexist with the other person's     *
+     * like. A pass is immutable and can never prove or create a match.    *
+     * ---------------------------------------------------------------- */
+
+    match /passes/{passId} {
+      function involved() {
+        return signedIn() &&
+          (resource.data.fromUid == uid() || resource.data.toUid == uid());
+      }
+
+      allow get: if signedIn() &&
+        (resource == null || resource.data.fromUid == uid() || resource.data.toUid == uid());
+      allow list: if involved();
+
+      allow create: if signedIn() &&
+        request.resource.data.fromUid == uid() &&
+        request.resource.data.toUid is string &&
+        request.resource.data.toUid != uid() &&
+        request.resource.data.type == 'pass';
+
+      // Decisions are permanent — a pass is never edited or withdrawn.
+      allow update: if false;
+      allow delete: if isAdmin();
+    }
+
+    /* ---------------------------------------------------------------- *
      * matches/{match_{a}_{b}}                                            *
      * ---------------------------------------------------------------- */
 

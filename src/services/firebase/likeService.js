@@ -19,6 +19,7 @@ import {
   friendlyError,
   likeDocId,
   matchDocId,
+  passDocId,
   sortedPair,
 } from './helpers';
 import { getDb } from './firebaseConfig';
@@ -36,13 +37,23 @@ export const likeProfile = async (fromUid, toUid) => {
 
   try {
     const outcome = await runTransaction(getDb(), async (tx) => {
-      const [likeSnap, reverseSnap, matchSnap] = await Promise.all([
+      const [likeSnap, reverseSnap, matchSnap, passSnap] = await Promise.all([
         tx.get(docRef('likes', likeId)),
         tx.get(docRef('likes', reverseId)),
         tx.get(docRef('matches', matchId)),
+        tx.get(docRef('passes', passDocId(fromUid, toUid))),
       ]);
 
-      if (!likeSnap.exists() || likeSnap.data().type !== 'like') {
+      // A pass is a permanent decision: it can never be turned into a like or
+      // a match, even if a stale UI fires this call again.
+      if (passSnap.exists() && passSnap.data().fromUid === fromUid) {
+        return { matched: false };
+      }
+
+      // Only ever (re)write the shared like doc when it is empty or already
+      // this user's own record — never clobber the other person's like/pass.
+      const likeOwnedByMe = likeSnap.exists() && likeSnap.data().fromUid === fromUid;
+      if (!likeSnap.exists() || (likeOwnedByMe && likeSnap.data().type !== 'like')) {
         tx.set(docRef('likes', likeId), {
           id: likeId,
           fromUid,
@@ -61,7 +72,16 @@ export const likeProfile = async (fromUid, toUid) => {
         };
       }
 
-      if (reverseSnap.exists() && reverseSnap.data().type !== 'pass') {
+      // The pair shares one like document, so an existing doc is not proof of a
+      // reciprocal like by itself — it may be the caller's own like, or a pass.
+      // Only a *like* whose stored direction is the other person → the caller
+      // makes this mutual.
+      if (
+        reverseSnap.exists() &&
+        reverseSnap.data().type === 'like' &&
+        reverseSnap.data().fromUid === toUid &&
+        reverseSnap.data().toUid === fromUid
+      ) {
         tx.set(docRef('matches', matchId), {
           id: matchId,
           conversationId,
@@ -137,14 +157,31 @@ export const likeProfile = async (fromUid, toUid) => {
   }
 };
 
-/** Record a pass — removes the profile from future decks. */
+/**
+ * Record a permanent, directional pass.
+ *
+ * A pass lives in its OWN document (`passes/pass_{from}__{to}`, direction
+ * explicit) so it can coexist with the other person's like in the shared
+ * `likes/{pair}` document — the one-doc-per-pair model could not hold both,
+ * which is why a pass silently vanished before. A pass never creates a match.
+ */
 export const passProfile = async (fromUid, toUid) => {
-  const id = likeDocId(fromUid, toUid);
+  const passId = passDocId(fromUid, toUid);
   try {
-    const existing = await getDoc(docRef('likes', id));
-    if (existing.exists()) return { matched: false };
-    await setDoc(docRef('likes', id), {
-      id,
+    const [existingPass, existingLike] = await Promise.all([
+      getDoc(docRef('passes', passId)),
+      getDoc(docRef('likes', likeDocId(fromUid, toUid))),
+    ]);
+    // Decisions are permanent: never replace my own earlier pass, and never
+    // overwrite a like I already sent. (An incoming like from the other person
+    // is in the shared doc with the opposite direction and is left untouched.)
+    if (existingPass.exists()) return { matched: false };
+    if (existingLike.exists() && existingLike.data().fromUid === fromUid) {
+      return { matched: false };
+    }
+
+    await setDoc(docRef('passes', passId), {
+      id: passId,
       fromUid,
       toUid,
       type: 'pass',
@@ -156,14 +193,35 @@ export const passProfile = async (fromUid, toUid) => {
   return { matched: false };
 };
 
-/** Has this user already liked/passed me? (used by "liked you" and detail view) */
+/**
+ * The like/pass `fromUid` sent to `toUid`, or null.
+ *
+ * Likes use ONE order-independent document per pair, so the doc id alone does
+ * not carry direction — the stored `fromUid`/`toUid` do. A like the other
+ * person sent must therefore never be returned as if the caller sent it,
+ * otherwise opening their profile would read as a mutual match. Passes live in
+ * their own directional collection (see `passProfile`).
+ */
 export const getLikeFrom = async (fromUid, toUid) => {
   try {
     const snapshot = await getDoc(docRef('likes', likeDocId(fromUid, toUid)));
-    return snapshot.exists() ? docToModel(snapshot) : null;
+    if (snapshot.exists()) {
+      const like = docToModel(snapshot);
+      if (like.fromUid === fromUid && like.toUid === toUid) return like;
+    }
+  } catch {
+    // Fall through to the directional pass lookup.
+  }
+  try {
+    const snapshot = await getDoc(docRef('passes', passDocId(fromUid, toUid)));
+    if (snapshot.exists()) {
+      const pass = docToModel(snapshot);
+      if (pass.fromUid === fromUid && pass.toUid === toUid) return pass;
+    }
   } catch {
     return null;
   }
+  return null;
 };
 
 /** Likes I gave today (the free daily limit). */

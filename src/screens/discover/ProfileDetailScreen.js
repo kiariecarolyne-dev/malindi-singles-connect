@@ -90,6 +90,7 @@ const ProfileDetailScreen = ({ navigation, route }) => {
   };
 
   const handleLike = async () => {
+    if (actionBusy || myLike) return;
     setActionBusy(true);
     try {
       const result = await likeService.likeProfile(user.uid, uid);
@@ -106,6 +107,7 @@ const ProfileDetailScreen = ({ navigation, route }) => {
   };
 
   const handlePass = async () => {
+    if (actionBusy || myLike) return;
     setActionBusy(true);
     try {
       await likeService.passProfile(user.uid, uid);
@@ -313,9 +315,7 @@ const ProfileDetailScreen = ({ navigation, route }) => {
             alreadyLiked ? (
               <View style={styles.likedBox}>
                 <Ionicons name="heart" size={18} color={colors.primary} />
-                <Text style={styles.likedText}>
-                  {theyLikedMe ? 'You both like each other!' : `You liked ${other.fullName} — waiting for a match`}
-                </Text>
+                <Text style={styles.likedText}>{`You liked ${other.fullName} — waiting for a match`}</Text>
               </View>
             ) : alreadyPassed ? (
               <View style={styles.passedBox}>
@@ -323,16 +323,26 @@ const ProfileDetailScreen = ({ navigation, route }) => {
                 <Text style={styles.passedText}>You passed on this profile</Text>
               </View>
             ) : (
-              <View style={styles.likeRow}>
-                <Button
-                  title="Pass"
-                  variant="secondary"
-                  icon="close"
-                  onPress={handlePass}
-                  loading={actionBusy}
-                  style={styles.passAction}
-                />
-                <Button title="Like" icon="heart" onPress={handleLike} loading={actionBusy} style={styles.likeAction} />
+              <View style={styles.actionStack}>
+                {theyLikedMe ? (
+                  <View style={styles.incomingBox}>
+                    <Ionicons name="heart" size={18} color={colors.primary} />
+                    <Text style={styles.incomingText}>
+                      {`${other.fullName} liked you — like back to match`}
+                    </Text>
+                  </View>
+                ) : null}
+                <View style={styles.likeRow}>
+                  <Button
+                    title="Pass"
+                    variant="secondary"
+                    icon="close"
+                    onPress={handlePass}
+                    loading={actionBusy}
+                    style={styles.passAction}
+                  />
+                  <Button title="Like" icon="heart" onPress={handleLike} loading={actionBusy} style={styles.likeAction} />
+                </View>
               </View>
             )
           ) : (
@@ -448,9 +458,19 @@ const styles = StyleSheet.create({
   sharedLabel: { color: colors.textSecondary, fontSize: 13, marginBottom: spacing.sm },
   compatNote: { color: colors.textMuted, fontSize: 11, marginTop: spacing.sm, fontStyle: 'italic' },
   actions: { marginHorizontal: spacing.lg, marginTop: spacing.xl },
+  actionStack: { gap: spacing.md },
   likeRow: { flexDirection: 'row', gap: spacing.md },
   passAction: { flex: 1 },
   likeAction: { flex: 1.4 },
+  incomingBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.primarySoft,
+    borderRadius: radius.lg,
+    padding: spacing.lg,
+    gap: spacing.md,
+  },
+  incomingText: { color: colors.primary, fontSize: 14, fontWeight: '700', flex: 1 },
   likedBox: {
     flexDirection: 'row',
     alignItems: 'center',

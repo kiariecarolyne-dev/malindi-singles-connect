@@ -5,34 +5,30 @@ import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useAuth } from '../context/AuthContext';
-import { messageService, premiumService } from '../services';
+import { messageService } from '../services';
 import ActiveScreen from '../screens/active/ActiveScreen';
-import DiscoverScreen from '../screens/discover/DiscoverScreen';
-import GoldCircleScreen from '../screens/goldCircle/GoldCircleScreen';
 import MatchesScreen from '../screens/matches/MatchesScreen';
 import MeetScreen from '../screens/meet/MeetScreen';
 import ProfileScreen from '../screens/profile/ProfileScreen';
-import AdminScreen from '../screens/admin/AdminScreen';
 import { colors, typography } from '../theme';
 
 const Tab = createBottomTabNavigator();
 
 const ICONS = {
-  Discover: { active: 'heart', inactive: 'heart-outline' },
   Active: { active: 'flame', inactive: 'flame-outline' },
   Matches: { active: 'chatbubble', inactive: 'chatbubble-outline' },
   Meet: { active: 'calendar', inactive: 'calendar-outline' },
-  GoldCircle: { active: 'diamond', inactive: 'diamond-outline' },
   Profile: { active: 'person', inactive: 'person-outline' },
-  Admin: { active: 'shield-checkmark', inactive: 'shield-checkmark-outline' },
 };
 
+/**
+ * The four main destinations: Active (browse singles), Matches, Meet and
+ * Profile. Gold Circle and Admin are reached from Profile (and registered on
+ * the root stack) instead of crowding the tab bar.
+ */
 const MainTabs = () => {
   const insets = useSafeAreaInsets();
-  const { isAdmin, user, profile } = useAuth();
-  // 💛 Gold Circle only joins the tab bar for Gold members — free members
-  // reach it (and the upgrade paywall) from Profile, so the bar stays lean.
-  const isGold = premiumService.isGold(profile);
+  const { user } = useAuth();
   const [unread, setUnread] = useState(0);
 
   useEffect(() => {
@@ -69,31 +65,23 @@ const MainTabs = () => {
           },
         ],
         tabBarHideOnKeyboard: true,
-        tabBarIcon: ({ focused, color, size }) => {
-          const isGoldTab = route.name === 'GoldCircle';
-          return (
-            <Ionicons
-              name={ICONS[route.name]?.[focused ? 'active' : 'inactive'] || 'ellipse'}
-              size={size}
-              color={isGoldTab ? (focused ? colors.gold : 'rgba(255, 197, 66, 0.65)') : color}
-            />
-          );
-        },
+        tabBarIcon: ({ focused, color, size }) => (
+          <Ionicons
+            name={ICONS[route.name]?.[focused ? 'active' : 'inactive'] || 'ellipse'}
+            size={size}
+            color={color}
+          />
+        ),
       })}
     >
-      <Tab.Screen name="Discover" component={DiscoverScreen} />
       <Tab.Screen name="Active" component={ActiveScreen} />
-      <Tab.Screen name="Matches" component={MatchesScreen} options={unread > 0 ? { tabBarBadge: unread > 9 ? '9+' : unread } : undefined} />
+      <Tab.Screen
+        name="Matches"
+        component={MatchesScreen}
+        options={unread > 0 ? { tabBarBadge: unread > 9 ? '9+' : unread } : undefined}
+      />
       <Tab.Screen name="Meet" component={MeetScreen} />
-      {isGold ? (
-        <Tab.Screen
-          name="GoldCircle"
-          component={GoldCircleScreen}
-          options={{ tabBarLabel: 'Gold Circle', tabBarLabelStyle: styles.goldTabLabel }}
-        />
-      ) : null}
       <Tab.Screen name="Profile" component={ProfileScreen} />
-      {isAdmin ? <Tab.Screen name="Admin" component={AdminScreen} options={{ title: 'Admin' }} /> : null}
     </Tab.Navigator>
   );
 };
@@ -111,7 +99,6 @@ const styles = StyleSheet.create({
     shadowRadius: 12,
   },
   tabLabel: { fontSize: 11, fontWeight: '600', marginBottom: 2 },
-  goldTabLabel: { fontSize: 10, fontWeight: '800', marginBottom: 2, color: colors.gold },
 });
 
 export default MainTabs;

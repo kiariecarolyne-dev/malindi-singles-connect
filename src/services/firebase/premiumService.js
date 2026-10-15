@@ -26,6 +26,7 @@ import {
   fetchBlockedUids,
   fetchIncomingLikes,
   fetchMatchesFor,
+  fetchPassedTargets,
   fetchProfileDoc,
 } from './deck';
 
@@ -109,23 +110,27 @@ export const isGold = (profile) =>
 const buildLikeRows = async (viewerUid) => {
   if (!viewerUid) return [];
 
-  const [viewer, incoming, blocked, matches, outgoing, entitlement] = await Promise.all([
+  const [viewer, incoming, blocked, matches, outgoing, passed, entitlement] = await Promise.all([
     fetchProfileDoc(viewerUid),
     fetchIncomingLikes(viewerUid),
     fetchBlockedUids(viewerUid),
     fetchMatchesFor(viewerUid),
     getDocs(query(col('likes'), where('fromUid', '==', viewerUid), limit(2000))),
+    fetchPassedTargets(viewerUid),
     getEntitlement(viewerUid),
   ]);
 
   const goldMember = entitlement.isGold || isGold(viewer);
   const visibleLimit = getVisibleLikeLimit(goldMember);
 
-  const myPasses = new Set(
-    docsToModels(outgoing)
+  // My own "no" decisions: legacy passes kept in `likes` plus the directional
+  // `passes` collection. A liker I already passed is no longer actionable.
+  const myPasses = new Set([
+    ...docsToModels(outgoing)
       .filter((l) => l.type === 'pass')
       .map((l) => l.toUid),
-  );
+    ...passed,
+  ]);
   const matchByOther = new Map();
   matches
     .filter((m) => !m.blocked)
@@ -139,7 +144,8 @@ const buildLikeRows = async (viewerUid) => {
         row.profile &&
         row.like.type !== 'pass' &&
         !row.profile.suspended &&
-        !blocked.has(row.profile.uid),
+        !blocked.has(row.profile.uid) &&
+        !myPasses.has(row.profile.uid),
     );
 
   return rows.map((row, index) => {

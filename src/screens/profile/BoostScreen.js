@@ -60,7 +60,7 @@ const BoostScreen = ({ navigation }) => {
           <Ionicons name="rocket" size={38} color={colors.white} />
           <Text style={styles.heroTitle}>Boost</Text>
           <Text style={styles.heroSub}>
-            Jump to the front of Discover around Malindi for {LIMITS.boostMinutes} minutes — up to 10x
+            Jump to the front of Active around Malindi for {LIMITS.boostMinutes} minutes — up to 10x
             more profile views.
           </Text>
         </LinearGradient>

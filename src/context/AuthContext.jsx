@@ -17,6 +17,26 @@ import { authService, profileService } from '../services';
 
 const AuthContext = createContext(null);
 
+/**
+ * Startup reads (session restore + profile load) hit Firestore. When the
+ * device has no usable connection, Firestore's getDoc waits for the backend
+ * and can stay pending for a very long time. The root gate below treats those
+ * flags as "keep showing the splash", so an unresolved read used to leave the
+ * app on the loading logo forever. Race every startup await against this
+ * timeout so the gate always settles, even when initialization fails.
+ */
+const STARTUP_TIMEOUT_MS = 10000;
+
+const withTimeout = (promise, ms = STARTUP_TIMEOUT_MS) => {
+  let timer;
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error('startup-timeout')), ms);
+    }),
+  ]).finally(() => clearTimeout(timer));
+};
+
 export const AuthProvider = ({ children }) => {
   const [initializing, setInitializing] = useState(true);
   const [user, setUser] = useState(null);
@@ -34,7 +54,8 @@ export const AuthProvider = ({ children }) => {
     setProfileLoading(true);
     setProfileLoaded(false);
     try {
-      const p = await profileService.getProfile(uid);
+      // Never let a stalled Firestore read keep the root splash up.
+      const p = await withTimeout(profileService.getProfile(uid));
       setProfile(p);
       setProfileLoaded(true);
     } catch {
@@ -64,8 +85,8 @@ export const AuthProvider = ({ children }) => {
       if (signUpInFlight.current) return;
       applyAuthUser(nextUser);
     });
-    authService
-      .restoreSession()
+    // Bounded so `initializing` always clears and the splash can never stick.
+    withTimeout(authService.restoreSession())
       .catch(() => {})
       .finally(() => setInitializing(false));
     return unsubscribe;

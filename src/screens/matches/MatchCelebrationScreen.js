@@ -97,7 +97,7 @@ const MatchCelebrationScreen = ({ navigation, route }) => {
       <View style={styles.root}>
         <ErrorState message={error} onRetry={() => navigation.goBack()} />
         <View style={styles.lateBtn}>
-          <Button title="Back to Discover" onPress={() => navigation.replace('MainTabs')} />
+          <Button title="Back to Active" onPress={() => navigation.replace('MainTabs')} />
         </View>
       </View>
     );
@@ -167,7 +167,7 @@ const MatchCelebrationScreen = ({ navigation, route }) => {
             onPress={() => openChat(true)}
             style={styles.iceBtn}
           />
-          <Button title="Keep discovering" variant="ghost" onPress={() => navigation.replace('MainTabs')} style={styles.keepBtn} />
+          <Button title="Keep browsing" variant="ghost" onPress={() => navigation.replace('MainTabs')} style={styles.keepBtn} />
         </Animated.View>
       </View>
     </View>

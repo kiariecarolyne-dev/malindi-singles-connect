@@ -129,9 +129,9 @@ const MatchesScreen = ({ navigation }) => {
         <EmptyState
           emoji="💕"
           title="No matches yet"
-          message="Like someone in Discover and when the feeling is mutual, they will show up here."
+          message="Like someone in Active and when the feeling is mutual, they will show up here."
           actionLabel="Browse singles"
-          onAction={() => navigation.navigate('Discover')}
+          onAction={() => navigation.navigate('Active')}
         />
       ) : (
         <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>

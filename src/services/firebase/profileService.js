@@ -22,7 +22,7 @@ import {
   writeBatch,
 } from 'firebase/firestore';
 
-import { LIMITS } from '../../config/env';
+import { APP, LIMITS } from '../../config/env';
 import { isKnownArea, isSameAreaGroup } from '../../constants/areas';
 import { calculateAge, profileAge } from '../../utils/age';
 import { getDb, getFirebaseAuth } from './firebaseConfig';
@@ -519,6 +519,76 @@ export const getActiveProfiles = async (myUid, take = 12) => {
 };
 
 /**
+ * 🔥 Active Singles — the browsable list behind the Active tab.
+ *
+ * Uses the exact same eligibility pipeline as discovery (gender interest,
+ * reciprocal interest, age preferences, adult-only, block/suspension and
+ * locked-liker privacy) but WITHOUT the "already seen" exclusion. That keeps
+ * every eligible single browsable — including a brand-new registration like
+ * Felisha — and orders the most recently active people first.
+ *
+ * Decisions are respected: anyone I already liked or passed is left out, so a
+ * passed profile never returns as an actionable choice. People who liked me and
+ * whom I have not yet answered stay listed (they open on the "Liked you" state).
+ */
+export const getActiveSingles = async (myUid, { take = 60 } = {}) => {
+  const me = await fetchProfileDoc(myUid);
+  if (!me) {
+    return { profiles: [], reason: DISCOVER_REASON.noProfile, missing: ['profile'] };
+  }
+
+  const missing = [];
+  if (!me.gender) missing.push('gender');
+  if (!Array.isArray(me.interestedIn) || me.interestedIn.length === 0) missing.push('interestedIn');
+  if (missing.length) {
+    return { profiles: [], reason: DISCOVER_REASON.incompleteProfile, missing };
+  }
+
+  const [blocked, hiddenLikers, decided] = await Promise.all([
+    fetchBlockedUids(myUid),
+    // 🔒 locked incoming likes stay hidden until Gold or a mutual match
+    premiumService.getHiddenLikerUids(myUid),
+    // everyone I already liked or passed — no longer an actionable choice
+    fetchOutgoingTargets(myUid),
+  ]);
+
+  const minAge = me.preferences?.minAge || APP.minAge;
+  const maxAge = me.preferences?.maxAge || 99;
+
+  const candidates = await collectCandidates({
+    interestedInGender: me.gender,
+    need: take,
+    maxDocs: 900,
+    filter: (profile) => {
+      if (profile.uid === myUid) return false;
+      if (decided.has(profile.uid)) return false;
+      if (blocked.has(profile.uid) || hiddenLikers.has(profile.uid)) return false;
+      if (profile.suspended) return false;
+      if (!(me.interestedIn || []).includes(profile.gender)) return false;
+      if (!(profile.interestedIn || []).includes(me.gender)) return false;
+      const age = profileAge(profile);
+      // Adult-only floor, then the viewer's own age preference.
+      if (age < APP.minAge) return false;
+      if (age < minAge || age > maxAge) return false;
+      return true;
+    },
+  });
+
+  candidates.sort(
+    (a, b) =>
+      (b.lastActiveAt ? new Date(b.lastActiveAt).getTime() : 0) -
+        (a.lastActiveAt ? new Date(a.lastActiveAt).getTime() : 0) ||
+      (isSameAreaGroup(me.area, b.area) ? 1 : 0) - (isSameAreaGroup(me.area, a.area) ? 1 : 0),
+  );
+
+  return {
+    profiles: candidates,
+    reason: candidates.length ? DISCOVER_REASON.ok : DISCOVER_REASON.empty,
+    missing: [],
+  };
+};
+
+/**
  * People who liked you — delegates ALL visibility/privacy rules to
  * premiumService (3 free + Gold unlock, redacted locked rows).
  */
@@ -626,6 +696,7 @@ export default {
   DISCOVER_REASON,
   getNearbyProfiles,
   getActiveProfiles,
+  getActiveSingles,
   getLikedYouProfiles,
   blockUser,
   unblockUser,

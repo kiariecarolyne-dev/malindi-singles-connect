@@ -41,9 +41,26 @@ export const fetchBlockedUids = async (uid) => {
   return blocked;
 };
 
-/** Targets of every like/pass I already gave — they leave my deck. */
+/**
+ * Targets of every decision I already made (like in `likes`, pass in
+ * `passes`) — they leave my deck and never come back as actionable.
+ */
 export const fetchOutgoingTargets = async (uid) => {
-  const snapshot = await getDocs(query(col('likes'), where('fromUid', '==', uid), limit(2000)));
+  const [likes, passes] = await Promise.all([
+    getDocs(query(col('likes'), where('fromUid', '==', uid), limit(2000))),
+    getDocs(query(col('passes'), where('fromUid', '==', uid), limit(2000))),
+  ]);
+  const targets = new Set();
+  likes.docs.forEach((d) => targets.add(docToModel(d).toUid));
+  passes.docs.forEach((d) => targets.add(docToModel(d).toUid));
+  return targets;
+};
+
+/** Uids I passed on (directional `passes` collection). */
+export const fetchPassedTargets = async (uid) => {
+  const snapshot = await getDocs(
+    query(col('passes'), where('fromUid', '==', uid), limit(2000)),
+  );
   return new Set(snapshot.docs.map((d) => docToModel(d).toUid));
 };
 
@@ -128,6 +145,7 @@ export default {
   fetchProfileDoc,
   fetchBlockedUids,
   fetchOutgoingTargets,
+  fetchPassedTargets,
   fetchIncomingLikes,
   fetchMatchesFor,
   collectCandidates,

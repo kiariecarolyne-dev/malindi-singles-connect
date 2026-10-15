@@ -2,6 +2,7 @@ import React from 'react';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 
 import MainTabs from './MainTabs';
+import AdminScreen from '../screens/admin/AdminScreen';
 import BlockedUsersScreen from '../screens/profile/BlockedUsersScreen';
 import BoostScreen from '../screens/profile/BoostScreen';
 import EditProfileScreen from '../screens/profile/EditProfileScreen';
@@ -40,6 +41,8 @@ const AppStack = () => (
         paywall for free members, and the rules deny them the data. */}
     <Stack.Screen name="GoldCircle" component={GoldCircleScreen} />
     <Stack.Screen name="Boost" component={BoostScreen} />
+    {/* Admin moderation is reached from Profile, not a main tab. */}
+    <Stack.Screen name="Admin" component={AdminScreen} />
     <Stack.Screen name="MeetPlan" component={MeetPlanScreen} />
     <Stack.Screen name="Report" component={ReportScreen} />
     <Stack.Screen

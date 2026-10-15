@@ -37,7 +37,8 @@
           "photosPermission": "Malindi Singles Connect needs access to your photos so you can add profile pictures."
         }
       ],
-      "expo-font"
+      "expo-font",
+      "expo-splash-screen"
     ],
     "extra": {
       "appTagline": "Meet. Match. Connect. Today.",

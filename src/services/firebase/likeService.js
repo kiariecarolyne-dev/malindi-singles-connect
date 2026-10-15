@@ -8,7 +8,7 @@
 import { getDoc, getDocs, limit as fsLimit, query, runTransaction, serverTimestamp, setDoc, where } from 'firebase/firestore';
 
 import { createNotification } from './notificationService';
-import { fetchProfileDoc } from './deck';
+import { fetchBlockedUids, fetchProfileDoc } from './deck';
 import { isLikeLocked } from './premiumService';
 import {
   col,
@@ -36,17 +36,24 @@ export const likeProfile = async (fromUid, toUid) => {
   const members = sortedPair(fromUid, toUid);
 
   try {
+    // A block takes precedence over any like: a pair that blocked each other
+    // (either direction) can never send a like or create a new match.
+    const blocked = await fetchBlockedUids(fromUid);
+    if (blocked.has(toUid)) return { matched: false };
+
     const outcome = await runTransaction(getDb(), async (tx) => {
-      const [likeSnap, reverseSnap, matchSnap, passSnap] = await Promise.all([
+      const [likeSnap, reverseSnap, matchSnap, passSnap, reversePassSnap] = await Promise.all([
         tx.get(docRef('likes', likeId)),
         tx.get(docRef('likes', reverseId)),
         tx.get(docRef('matches', matchId)),
         tx.get(docRef('passes', passDocId(fromUid, toUid))),
+        tx.get(docRef('passes', passDocId(toUid, fromUid))),
       ]);
 
-      // A pass is a permanent decision: it can never be turned into a like or
-      // a match, even if a stale UI fires this call again.
-      if (passSnap.exists() && passSnap.data().fromUid === fromUid) {
+      // A pass is a permanent decision for the pair: mine or theirs. It can
+      // never be turned into a like or a match, even if a stale UI fires this
+      // call again.
+      if (passSnap.exists() || reversePassSnap.exists()) {
         return { matched: false };
       }
 

@@ -5,10 +5,7 @@ import { Ionicons } from '@expo/vector-icons';
 import Button from '../../components/Button';
 import Screen from '../../components/Screen';
 import ScreenHeader from '../../components/ScreenHeader';
-import {
-  buildPlanText as buildText,
-  meetupService,
-} from '../../services';
+import { meetupService } from '../../services';
 import { MEET_ACTIVITIES, MEET_SAFETY_RULES, PUBLIC_PLACES } from '../../constants/meet';
 import { useAuth } from '../../context/AuthContext';
 import { colors, radius, spacing } from '../../theme';
@@ -121,7 +118,9 @@ const MeetPlanScreen = ({ navigation, route }) => {
         {activityId && placeId && timeLabel ? (
           <View style={styles.preview}>
             <Text style={styles.previewLabel}>Preview</Text>
-            <Text style={styles.previewText}>{buildText(activityId, placeId, timeLabel)}</Text>
+            <Text style={styles.previewText}>
+              {meetupService.buildPlanText(activityId, placeId, timeLabel)}
+            </Text>
           </View>
         ) : null}
 

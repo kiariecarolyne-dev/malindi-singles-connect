@@ -13,6 +13,7 @@ import {
   fetchBlockedUids,
   fetchMatchesFor,
   fetchOutgoingTargets,
+  fetchPassedPairUids,
   fetchProfileDoc,
   fetchRecentlyActive,
 } from './deck';
@@ -23,7 +24,14 @@ const sortNewestFirst = (a, b) => new Date(b.createdAt) - new Date(a.createdAt);
 
 /** Matches for a user, newest first, enriched with the other profile. */
 export const getMatches = async (uid) => {
-  const rows = (await fetchMatchesFor(uid)).filter((m) => !m.blocked).sort(sortNewestFirst);
+  const [allRows, passedPairs] = await Promise.all([
+    fetchMatchesFor(uid),
+    // a pass on either side permanently removes the pair from Matches
+    fetchPassedPairUids(uid),
+  ]);
+  const rows = allRows
+    .filter((m) => !m.blocked && !passedPairs.has(m.uids.find((x) => x !== uid)))
+    .sort(sortNewestFirst);
   const me = await fetchProfileDoc(uid);
 
   const enriched = await Promise.all(
@@ -95,13 +103,17 @@ export const quickMatch = async (myUid) => {
   const me = await fetchProfileDoc(myUid);
   if (!me) return null;
 
-  const [seen, blocked, hiddenLikers] = await Promise.all([
+  const [seen, blocked, hiddenLikers, matches, passedPairs] = await Promise.all([
     fetchOutgoingTargets(myUid),
     fetchBlockedUids(myUid),
     // 🔒 a locked incoming like must never be revealed by Quick Match
     premiumService.getHiddenLikerUids(myUid),
+    // existing matches and either-side passes are never a "new" match
+    fetchMatchesFor(myUid),
+    fetchPassedPairUids(myUid),
   ]);
-  const excluded = new Set([myUid, ...blocked, ...hiddenLikers]);
+  const matchPartners = matches.map((m) => m.uids.find((x) => x !== myUid)).filter(Boolean);
+  const excluded = new Set([myUid, ...blocked, ...hiddenLikers, ...matchPartners, ...passedPairs]);
 
   const candidates = await collectCandidates({
     interestedInGender: me.gender,

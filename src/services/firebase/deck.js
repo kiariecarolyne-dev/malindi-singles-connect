@@ -64,6 +64,25 @@ export const fetchPassedTargets = async (uid) => {
   return new Set(snapshot.docs.map((d) => docToModel(d).toUid));
 };
 
+/**
+ * Uids on the other side of ANY pass involving me — outgoing (I passed them)
+ * or incoming (they passed me). A pass is a permanent, MUTUAL "no": the pair
+ * must disappear from discovery and matches for BOTH people, not only for the
+ * person who pressed Pass. The directional `passes` collection stores exactly
+ * one document per direction, so both queries are needed.
+ */
+export const fetchPassedPairUids = async (uid) => {
+  const [outgoing, incoming] = await Promise.all([
+    getDocs(query(col('passes'), where('fromUid', '==', uid), limit(2000))),
+    getDocs(query(col('passes'), where('toUid', '==', uid), limit(2000))),
+  ]);
+  const uids = new Set();
+  outgoing.docs.forEach((d) => uids.add(docToModel(d).toUid));
+  incoming.docs.forEach((d) => uids.add(docToModel(d).fromUid));
+  uids.delete(uid);
+  return uids;
+};
+
 /** Incoming likes (oldest first) — the raw input of "Likes You". */
 export const fetchIncomingLikes = async (uid) => {
   const snapshot = await getDocs(
@@ -146,6 +165,7 @@ export default {
   fetchBlockedUids,
   fetchOutgoingTargets,
   fetchPassedTargets,
+  fetchPassedPairUids,
   fetchIncomingLikes,
   fetchMatchesFor,
   collectCandidates,

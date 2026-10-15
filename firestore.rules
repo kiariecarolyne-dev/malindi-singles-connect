@@ -42,6 +42,16 @@ service cloud.firestore {
           $(a < b ? 'block_' + a + '__' + b : 'block_' + b + '__' + a));
     }
 
+    /**
+     * A pass is directional (`pass_{from}__{to}`, NOT sorted) and permanent.
+     * Either direction proves the pair has said "no", so it must override any
+     * like and can never become a match. Both orderings are checked.
+     */
+    function passedBetween(a, b) {
+      return exists(/databases/$(database)/documents/passes/$('pass_' + a + '__' + b)) ||
+        exists(/databases/$(database)/documents/passes/$('pass_' + b + '__' + a));
+    }
+
     /** The other member of a two-uid list (relative to the caller). */
     function otherMember(uids) {
       return uids[0] == uid() ? uids[1] : uids[0];
@@ -275,7 +285,13 @@ service cloud.firestore {
 
       allow create: if signedIn() &&
         request.resource.data.fromUid == uid() &&
-        request.resource.data.type in ['like', 'pass'];
+        request.resource.data.type in ['like', 'pass'] &&
+        // A block or a pass (either direction) overrides any like.
+        (request.resource.data.type != 'like' ||
+          (request.resource.data.toUid is string &&
+            request.resource.data.toUid != uid() &&
+            !blockedBetween(uid(), request.resource.data.toUid) &&
+            !passedBetween(uid(), request.resource.data.toUid)));
 
       allow update: if signedIn() &&
         resource.data.fromUid == uid() &&
@@ -328,12 +344,15 @@ service cloud.firestore {
       // A match is only real when the other member already liked the caller;
       // the app creates it inside the mutual-like transaction (`likedMe`).
       // The doc id must be the canonical id for its uids, so other rules can
-      // trust `matches/match_{a}__{b}` as proof of that exact pair.
+      // trust `matches/match_{a}__{b}` as proof of that exact pair. A block or
+      // a pass on either side means the pair can NEVER become a match.
       allow create: if signedIn() &&
         request.resource.data.uids.size() == 2 &&
         request.resource.data.uids[0] != request.resource.data.uids[1] &&
         uid() in request.resource.data.uids &&
         matchId == pairId('match', request.resource.data.uids[0], request.resource.data.uids[1]) &&
+        !blockedBetween(request.resource.data.uids[0], request.resource.data.uids[1]) &&
+        !passedBetween(request.resource.data.uids[0], request.resource.data.uids[1]) &&
         likedMe(otherMember(request.resource.data.uids));
 
       // Participants flag `blocked` (and only that) when one blocks the other.

@@ -56,6 +56,16 @@ const MeetScreen = ({ navigation }) => {
     load();
   };
 
+  // A match drops out of "open to meet" once a plan between the pair is
+  // confirmed (accepted), on BOTH accounts. Derived from the Firestore meetups
+  // re-fetched on every focus, so it survives refreshes and app restarts.
+  const confirmedPartnerUids = new Set(
+    plans
+      .filter((plan) => plan.status === 'accepted')
+      .map((plan) => (plan.fromUid === user?.uid ? plan.toUid : plan.fromUid)),
+  );
+  const openMatches = matches.filter((match) => !confirmedPartnerUids.has(match.otherUid));
+
   const planOf = (plan) => {
     const activity = getMeetActivity(plan.activityId);
     const place = PUBLIC_PLACES.find((p) => p.id === plan.placeId);
@@ -133,8 +143,8 @@ const MeetScreen = ({ navigation }) => {
 
             <View style={styles.section}>
               <Text style={styles.sectionTitle}>Matches open to meet</Text>
-              {matches.length ? (
-                matches.map((m) => (
+              {openMatches.length ? (
+                openMatches.map((m) => (
                   <TouchableOpacity
                     key={m.id}
                     style={styles.matchRow}

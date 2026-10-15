@@ -41,7 +41,9 @@ import {
 import {
   collectCandidates,
   fetchBlockedUids,
+  fetchMatchesFor,
   fetchOutgoingTargets,
+  fetchPassedPairUids,
   fetchProfileDoc,
   fetchRecentlyActive,
 } from './deck';
@@ -544,13 +546,21 @@ export const getActiveSingles = async (myUid, { take = 60 } = {}) => {
     return { profiles: [], reason: DISCOVER_REASON.incompleteProfile, missing };
   }
 
-  const [blocked, hiddenLikers, decided] = await Promise.all([
+  const [blocked, hiddenLikers, decided, matches, passedPair] = await Promise.all([
     fetchBlockedUids(myUid),
     // 🔒 locked incoming likes stay hidden until Gold or a mutual match
     premiumService.getHiddenLikerUids(myUid),
     // everyone I already liked or passed — no longer an actionable choice
     fetchOutgoingTargets(myUid),
+    // my existing matches must never reappear as someone to consider
+    fetchMatchesFor(myUid),
+    // anyone on either side of a pass — a "no" is mutual, not one-way
+    fetchPassedPairUids(myUid),
   ]);
+
+  const matchPartners = new Set(
+    matches.map((m) => m.uids.find((x) => x !== myUid)).filter(Boolean),
+  );
 
   const minAge = me.preferences?.minAge || APP.minAge;
   const maxAge = me.preferences?.maxAge || 99;
@@ -562,6 +572,8 @@ export const getActiveSingles = async (myUid, { take = 60 } = {}) => {
     filter: (profile) => {
       if (profile.uid === myUid) return false;
       if (decided.has(profile.uid)) return false;
+      if (matchPartners.has(profile.uid)) return false;
+      if (passedPair.has(profile.uid)) return false;
       if (blocked.has(profile.uid) || hiddenLikers.has(profile.uid)) return false;
       if (profile.suspended) return false;
       if (!(me.interestedIn || []).includes(profile.gender)) return false;
@@ -642,6 +654,19 @@ export const isBlocked = async (myUid, otherUid) => {
   return blocked.has(otherUid);
 };
 
+/**
+ * Uids I must never surface in discovery or Matches: anyone I blocked or who
+ * blocked me, plus anyone on either side of a pass. Used by the Matches screen
+ * so a blocked/passed pair never reappears there (including old conversations).
+ */
+export const getHiddenPartnerUids = async (myUid) => {
+  const [blocked, passedPair] = await Promise.all([
+    fetchBlockedUids(myUid),
+    fetchPassedPairUids(myUid),
+  ]);
+  return new Set([...blocked, ...passedPair]);
+};
+
 export const countActiveAround = async (myUid) =>
   (await getActiveProfiles(myUid, 100)).length;
 
@@ -702,6 +727,7 @@ export default {
   unblockUser,
   getBlockedUsers,
   isBlocked,
+  getHiddenPartnerUids,
   countActiveAround,
   viewerHasBlockedMe,
   getPendingVerifications,

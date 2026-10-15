@@ -24,9 +24,11 @@ const MatchesScreen = ({ navigation }) => {
   const load = useCallback(async () => {
     if (!user?.uid) return;
     try {
-      const [convs, matches] = await Promise.all([
+      const [convs, matches, hidden] = await Promise.all([
         messageService.getMyConversations(user.uid),
         matchService.getMatches(user.uid),
+        // blocked (either way) and passed (either way) pairs must not surface
+        profileService.getHiddenPartnerUids(user.uid),
       ]);
 
       const rows = await Promise.all(
@@ -37,8 +39,8 @@ const MatchesScreen = ({ navigation }) => {
       );
 
       const messaged = new Set(rows.filter((r) => r.lastMessage).map((r) => r.otherUid));
-      setConversations(rows.filter((r) => r.other && r.lastMessage));
-      setNewMatches(matches.filter((m) => !messaged.has(m.otherUid)));
+      setConversations(rows.filter((r) => r.other && r.lastMessage && !hidden.has(r.otherUid)));
+      setNewMatches(matches.filter((m) => !messaged.has(m.otherUid) && !hidden.has(m.otherUid)));
       setError(null);
     } catch (e) {
       setError(e.message || 'Could not load your matches.');

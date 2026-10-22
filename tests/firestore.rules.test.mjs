@@ -564,6 +564,75 @@ await denies('stranger lists blocks involving someone else', () =>
 await allows('unblock (delete own block)', () => asUser(ALICE).doc(`blocks/${blockA}`).delete());
 await denies('delete someone elses block', () => asUser(CAROL).doc(`blocks/${blockB}`).delete());
 
+// --- blocks: no messaging in either direction ----------------------------
+// A single canonical, order-independent block doc (`block_{min}__{max}`) must
+// silently freeze every write on the pair's conversation, no matter which side
+// created it and no matter how the client reaches the messages subcollection.
+console.log('\nblocks freeze messaging in both directions');
+const blockAB = `block_${[ALICE, BOB].sort().join('__')}`;
+const msg = (senderUid, id) => ({
+  id, conversationId: convId, senderUid, text: 'hey', read: false, type: 'text',
+  createdAt: new Date().toISOString(),
+});
+
+await allows('pair can message while nobody is blocked', () =>
+  asUser(BOB).doc(`conversations/${convId}/messages/msg_pre`).set(msg(BOB, 'msg_pre')),
+);
+
+await env.withSecurityRulesDisabled(async (ctx) => {
+  await ctx.firestore().doc(`blocks/${blockAB}`).set({
+    id: blockAB, uid: ALICE, blockedUid: BOB, createdAt: new Date().toISOString(),
+  });
+});
+
+await denies('blocked member cannot send a message', () =>
+  asUser(BOB).doc(`conversations/${convId}/messages/msg_blocked_bob`).set(msg(BOB, 'msg_blocked_bob')),
+);
+await denies('blocker cannot send a message either', () =>
+  asUser(ALICE).doc(`conversations/${convId}/messages/msg_blocked_alice`).set(msg(ALICE, 'msg_blocked_alice')),
+);
+await denies('blocked member cannot update the conversation summary', () =>
+  asUser(BOB).doc(`conversations/${convId}`).update({ unread: { [ALICE]: 1, [BOB]: 0 }, messageCount: 3 }),
+);
+await denies('blocker cannot update the conversation summary', () =>
+  asUser(ALICE).doc(`conversations/${convId}`).update({ unread: { [ALICE]: 0, [BOB]: 2 }, messageCount: 3 }),
+);
+await denies('blocked member cannot broadcast typing', () =>
+  asUser(BOB).doc(`conversations/${convId}/typing/${BOB}`).set({ at: new Date().toISOString() }),
+);
+await denies('blocked pair cannot open a fresh conversation', () =>
+  asUser(ALICE).doc('conversations/conv_blocked_new').set({
+    id: 'conv_blocked_new', matchId: null, members: [ALICE, BOB].sort(),
+    lastMessage: null, lastFrom: null, lastMessageAt: null, unread: {}, messageCount: 0,
+    createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+  }),
+);
+
+// Lifting the block restores messaging in both directions (history preserved).
+await env.withSecurityRulesDisabled(async (ctx) => {
+  await ctx.firestore().doc(`blocks/${blockAB}`).delete();
+});
+await allows('blocked member can message again once the block is lifted', () =>
+  asUser(BOB).doc(`conversations/${convId}/messages/msg_after_bob`).set(msg(BOB, 'msg_after_bob')),
+);
+await allows('blocker can message again once the block is lifted', () =>
+  asUser(ALICE).doc(`conversations/${convId}/messages/msg_after_alice`).set(msg(ALICE, 'msg_after_alice')),
+);
+
+// Direction matters for who created the block, not for enforcement: a block
+// created by the *other* side must freeze the same conversation identically.
+await env.withSecurityRulesDisabled(async (ctx) => {
+  await ctx.firestore().doc(`blocks/${blockAB}`).set({
+    id: blockAB, uid: BOB, blockedUid: ALICE, createdAt: new Date().toISOString(),
+  });
+});
+await denies('a block created by the other side also stops the messages', () =>
+  asUser(ALICE).doc(`conversations/${convId}/messages/msg_rev`).set(msg(ALICE, 'msg_rev')),
+);
+await env.withSecurityRulesDisabled(async (ctx) => {
+  await ctx.firestore().doc(`blocks/${blockAB}`).delete();
+});
+
 console.log('\nmeetups');
 await allows('matched pair propose a plan', () =>
   asUser(ALICE).doc('meetups/meet2').set({

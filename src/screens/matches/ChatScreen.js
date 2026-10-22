@@ -135,7 +135,12 @@ const ChatScreen = ({ navigation, route }) => {
       const clean = (text || '').trim();
       if (!clean) return;
       setInput('');
-      await messageService.sendMessage(conversationId, user.uid, clean);
+      try {
+        await messageService.sendMessage(conversationId, user.uid, clean);
+      } catch {
+        setInput((v) => v || clean);
+        Alert.alert('Message not sent', 'You can no longer message this person.');
+      }
     },
     [conversationId, user],
   );
@@ -144,7 +149,7 @@ const ChatScreen = ({ navigation, route }) => {
     const ib = route?.params?.autoIcebreaker;
     if (ib && conversationId && !autoSent.current) {
       autoSent.current = true;
-      messageService.sendMessage(conversationId, user.uid, ib);
+      messageService.sendMessage(conversationId, user.uid, ib).catch(() => {});
     }
   }, [conversationId, route, user]);
 

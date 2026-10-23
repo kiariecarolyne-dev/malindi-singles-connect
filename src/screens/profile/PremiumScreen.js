@@ -39,9 +39,12 @@ const PremiumScreen = ({ navigation }) => {
   const [error, setError] = useState(null);
   const [message, setMessage] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [checkingPayment, setCheckingPayment] = useState(false);
 
   const pollRef = useRef(null);
   const mountedRef = useRef(true);
+  const paymentIdRef = useRef(null);
+  const reconcilingRef = useRef(false);
 
   const stopPolling = useCallback(() => {
     if (pollRef.current) {
@@ -58,6 +61,85 @@ const PremiumScreen = ({ navigation }) => {
     [stopPolling],
   );
 
+  const finishSuccess = useCallback(async () => {
+    stopPolling();
+    paymentIdRef.current = null;
+    try {
+      await refreshProfile();
+    } catch (_e) {
+      // The backend confirmed Gold; a refresh failure must not hide that.
+    }
+    if (!mountedRef.current) return;
+    setStage('success');
+    setError(null);
+    setMessage('Malindi Gold is active — every like is now unlocked.');
+  }, [refreshProfile, stopPolling]);
+
+  const finishFailure = useCallback(
+    (payment) => {
+      stopPolling();
+      paymentIdRef.current = null;
+      setStage('failed');
+      setError(
+        payment?.resultDescription ||
+          'The M-Pesa payment did not go through. Gold stays locked and you were not charged for Gold.',
+      );
+    },
+    [stopPolling],
+  );
+
+  const settlePayment = useCallback(
+    async (payment, goldConfirmed = false) => {
+      if (!mountedRef.current) return false;
+      if (goldConfirmed || payment?.gold || payment?.status === 'success') {
+        await finishSuccess();
+        return true;
+      }
+      if (payment?.status === 'failed') {
+        finishFailure(payment);
+        return true;
+      }
+      return false;
+    },
+    [finishFailure, finishSuccess],
+  );
+
+  /**
+   * A timeout is ambiguous, not a failure. Reconcile the SAME payment first;
+   * never start a second STK Push while this one is unresolved.
+   */
+  const reconcileExistingPayment = useCallback(async () => {
+    const paymentId = paymentIdRef.current;
+    if (!paymentId || reconcilingRef.current) return;
+
+    reconcilingRef.current = true;
+    if (mountedRef.current) setCheckingPayment(true);
+
+    try {
+      const result = await premiumService.reconcileGoldPayment(paymentId);
+      if (!mountedRef.current) return;
+
+      const settled = await settlePayment(result.payment, result.gold);
+      if (!settled && mountedRef.current) {
+        setStage('timeout');
+        setError(null);
+        setMessage(
+          'M-Pesa has not confirmed this payment yet. Do not start another payment; check the status again in a moment.',
+        );
+      }
+    } catch (_e) {
+      if (!mountedRef.current) return;
+      setStage('timeout');
+      setError(null);
+      setMessage(
+        "We couldn't check your payment yet. Do not start another payment; check the status again in a moment.",
+      );
+    } finally {
+      reconcilingRef.current = false;
+      if (mountedRef.current) setCheckingPayment(false);
+    }
+  }, [settlePayment]);
+
   const beginPolling = useCallback(
     (paymentId) => {
       stopPolling();
@@ -68,41 +150,38 @@ const PremiumScreen = ({ navigation }) => {
 
         if (Date.now() - startedAt > POLL_TIMEOUT_MS) {
           stopPolling();
-          setStage('timeout');
-          setMessage(
-            "We couldn't confirm the payment yet. Please check your M-Pesa messages or try again.",
-          );
+          await reconcileExistingPayment();
           return;
         }
 
         try {
           const payment = await premiumService.getGoldPaymentStatus(paymentId);
           if (!payment || !mountedRef.current) return;
-
-          if (payment.gold || payment.status === 'success') {
-            stopPolling();
-            await refreshProfile();
-            if (!mountedRef.current) return;
-            setStage('success');
-            setMessage('Malindi Gold is active — every like is now unlocked.');
-          } else if (payment.status === 'failed') {
-            stopPolling();
-            setStage('failed');
-            setError(
-              payment.resultDescription ||
-                'The M-Pesa payment did not go through. Gold stays locked and you were not charged for Gold.',
-            );
-          }
+          await settlePayment(payment);
           // status 'pending' -> keep polling
         } catch (_e) {
           // Transient network error — keep polling until the timeout.
         }
       }, POLL_INTERVAL_MS);
     },
-    [refreshProfile, stopPolling],
+    [reconcileExistingPayment, settlePayment, stopPolling],
   );
 
   const startPayment = async () => {
+    // If an earlier payment is unresolved, reconcile it instead of creating
+    // another STK Push.
+    if (paymentIdRef.current) {
+      setError(null);
+      setMessage(null);
+      setBusy(true);
+      try {
+        await reconcileExistingPayment();
+      } finally {
+        if (mountedRef.current) setBusy(false);
+      }
+      return;
+    }
+
     setError(null);
     setMessage(null);
     setBusy(true);
@@ -116,12 +195,42 @@ const PremiumScreen = ({ navigation }) => {
         return;
       }
 
+      paymentIdRef.current = result.paymentId;
+
+      // A lost response can be retried safely: the backend returns the same
+      // payment (already successful, still pending, or failed).
+      const settled = await settlePayment(result);
+      if (settled) return;
+
       setStage('pending');
       setMessage(
         'An M-Pesa payment request has been sent to your phone. Enter your M-Pesa PIN to complete the payment.',
       );
       beginPolling(result.paymentId);
     } catch (e) {
+      if (e.code === 'PAYMENT_STARTING' && e.paymentId) {
+        // Another request is already starting this member's STK. Follow that
+        // same payment instead of sending a second one.
+        paymentIdRef.current = e.paymentId;
+        setStage('pending');
+        setMessage(
+          'A payment request is already being started. Keep this screen open while we confirm it.',
+        );
+        beginPolling(e.paymentId);
+        return;
+      }
+
+      if (e.code === 'PAYMENT_UNRESOLVED') {
+        // The previous payment cannot be safely resumed or identified. Keep the
+        // existing lock/payment untouched and do not encourage a second STK.
+        if (e.paymentId) paymentIdRef.current = e.paymentId;
+        setStage('failed');
+        setError(
+          'A previous M-Pesa payment could not be safely confirmed. Check your M-Pesa messages or transaction history before trying again, and do not start another payment while it is unresolved.',
+        );
+        return;
+      }
+
       setStage('failed');
       setError(e.message || 'Could not start the M-Pesa payment. Please try again.');
     } finally {
@@ -224,7 +333,13 @@ const PremiumScreen = ({ navigation }) => {
             <Text style={styles.statusHint}>
               Keep this screen open while we confirm your payment. This can take up to a minute.
             </Text>
-            <Button title="Cancel" variant="ghost" onPress={reset} style={styles.statusBtn} />
+            <Button
+              title="Cancel"
+              variant="ghost"
+              onPress={reset}
+              disabled={checkingPayment}
+              style={styles.statusBtn}
+            />
           </View>
         ) : stage === 'failed' || stage === 'timeout' ? (
           <View style={styles.statusCard}>
@@ -237,7 +352,14 @@ const PremiumScreen = ({ navigation }) => {
               {stage === 'timeout' ? 'Payment not confirmed yet' : 'Payment not completed'}
             </Text>
             <Text style={styles.statusText}>{error || message}</Text>
-            <Button title="Try again" variant="gold" onPress={reset} style={styles.statusBtn} />
+            <Button
+              title={stage === 'timeout' ? 'Check payment status' : 'Try again'}
+              variant="gold"
+              onPress={stage === 'timeout' ? reconcileExistingPayment : reset}
+              loading={stage === 'timeout' && (checkingPayment || busy)}
+              disabled={stage === 'timeout' && (checkingPayment || busy)}
+              style={styles.statusBtn}
+            />
           </View>
         ) : stage === 'phone' ? (
           <View style={styles.phoneCard}>

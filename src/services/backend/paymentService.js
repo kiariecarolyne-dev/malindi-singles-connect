@@ -50,6 +50,8 @@ const authedRequest = async (path, { method = 'GET', body } = {}) => {
         : data?.error || 'Payment request failed. Please try again.';
     const error = new Error(message);
     error.status = response.status;
+    error.code = data?.details?.code || null;
+    error.paymentId = data?.details?.paymentId || null;
     throw error;
   }
 
@@ -74,6 +76,8 @@ export const startGoldPayment = async (phoneNumber) => {
     paymentId: data.paymentId,
     checkoutRequestId: data.checkoutRequestId || null,
     status: data.status || 'pending',
+    gold: data.gold === true,
+    resultDescription: data.resultDescription || null,
   };
 };
 
@@ -84,4 +88,23 @@ export const getPaymentStatus = async (paymentId) => {
   return data?.payment || null;
 };
 
-export default { startGoldPayment, getPaymentStatus };
+/**
+ * Ask the backend to re-check a pending payment against Daraja.
+ *
+ * This is the recovery path for a callback that could not be verified or a
+ * status poll that timed out. The backend owns the verification and Gold
+ * activation; this function only returns its verified outcome.
+ */
+export const reconcilePayment = async (paymentId) => {
+  if (!paymentId) throw new Error('Missing payment reference.');
+  const data = await authedRequest(`/payments/${encodeURIComponent(paymentId)}/reconcile`, {
+    method: 'POST',
+  });
+  return {
+    outcome: data?.outcome || null,
+    payment: data?.payment || null,
+    gold: data?.gold === true,
+  };
+};
+
+export default { startGoldPayment, getPaymentStatus, reconcilePayment };

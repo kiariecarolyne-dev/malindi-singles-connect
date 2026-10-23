@@ -736,6 +736,13 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    /* goldPaymentLocks/{uid} - backend-only serialisation of STK starts.     *
+     * Clients must never read or write it: the lock is what stops concurrent *
+     * taps (and app restarts) from sending a second M-Pesa request.          */
+    match /goldPaymentLocks/{userId} {
+      allow read, write: if false;
+    }
+
     /* ---------------------------------------------------------------- *
      * deletionRequests/{uid} — durable account-deletion state            *
      * ---------------------------------------------------------------- */

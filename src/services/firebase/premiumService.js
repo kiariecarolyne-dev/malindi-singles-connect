@@ -19,7 +19,7 @@ import { getDoc, getDocs, limit, query, where } from 'firebase/firestore';
 import { FREE_VISIBLE_LIKES, GOLD } from '../../constants/plans';
 import { profileAge } from '../../utils/age';
 import { compatibilityScore } from '../../utils/compatibility';
-import { startGoldPayment, getPaymentStatus } from '../backend/paymentService';
+import { startGoldPayment, getPaymentStatus, reconcilePayment } from '../backend/paymentService';
 import { getFirebaseAuth } from './firebaseConfig';
 import { col, docRef, docToModel, docsToModels } from './helpers';
 import {
@@ -281,7 +281,9 @@ export const createGoldCheckout = async (phoneNumber) => {
 
   const result = await startGoldPayment(phoneNumber);
   return {
-    status: 'pending',
+    status: result.status || 'pending',
+    gold: result.gold === true,
+    resultDescription: result.resultDescription || null,
     paymentsConnected: true,
     paymentId: result.paymentId,
     checkoutRequestId: result.checkoutRequestId,
@@ -295,6 +297,9 @@ export const createGoldCheckout = async (phoneNumber) => {
 /** Poll the backend for a payment's status. */
 export const getGoldPaymentStatus = (paymentId) => getPaymentStatus(paymentId);
 
+/** Reconcile an existing pending payment before starting another one. */
+export const reconcileGoldPayment = (paymentId) => reconcilePayment(paymentId);
+
 export default {
   isGold,
   getEntitlement,
@@ -305,4 +310,5 @@ export default {
   canViewFullProfile,
   createGoldCheckout,
   getGoldPaymentStatus,
+  reconcileGoldPayment,
 };

@@ -1133,5 +1133,26 @@ await denies('receiver cannot accept once they blocked the sender', () =>
 );
 
 console.log(`\n${passed} passed, ${failed} failed`);
+// Gold payment locks are backend-only: clients must never read or write them,
+// including admins, because they are the STK concurrency guard.
+await denies('client cannot read a gold payment lock', () =>
+  asUser(ALICE).doc(`goldPaymentLocks/${ALICE}`).get(),
+);
+await denies('client cannot create a gold payment lock', () =>
+  asUser(ALICE).doc(`goldPaymentLocks/${ALICE}`).set({ uid: ALICE, paymentId: 'p1' }),
+);
+await denies('client cannot update a gold payment lock', () =>
+  asUser(ALICE).doc(`goldPaymentLocks/${ALICE}`).update({ paymentId: 'p2' }),
+);
+await denies('client cannot delete a gold payment lock', () =>
+  asUser(ALICE).doc(`goldPaymentLocks/${ALICE}`).delete(),
+);
+await denies('admin cannot read a gold payment lock', () =>
+  asUser(ADMIN).doc(`goldPaymentLocks/${ALICE}`).get(),
+);
+await denies('admin cannot write a gold payment lock', () =>
+  asUser(ADMIN).doc(`goldPaymentLocks/${ALICE}`).set({ uid: ALICE, paymentId: 'p1' }),
+);
+
 await env.cleanup();
 process.exit(failed ? 1 : 0);

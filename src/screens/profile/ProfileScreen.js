@@ -1,5 +1,19 @@
 import React, { useCallback, useState } from 'react';
-import { Alert, ScrollView, StyleSheet, Switch, Text, TouchableOpacity, View } from 'react-native';
+import {
+  ActivityIndicator,
+  Alert,
+  KeyboardAvoidingView,
+  Linking,
+  Modal,
+  Platform,
+  ScrollView,
+  StyleSheet,
+  Switch,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
+} from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect } from '@react-navigation/native';
@@ -14,7 +28,7 @@ import { getAreaLabel } from '../../constants/areas';
 import { getIntention } from '../../constants/datingIntentions';
 import { getInterestsByIds } from '../../constants/interests';
 import { useAuth } from '../../context/AuthContext';
-import { matchService, premiumService, profileService } from '../../services';
+import { accountService, authService, matchService, premiumService, profileService } from '../../services';
 import { profileAge } from '../../utils/age';
 import { isActiveRecently } from '../../utils/time';
 import { colors, radius, spacing } from '../../theme';
@@ -38,9 +52,13 @@ const MenuRow = ({ emoji, label, sub, onPress, right, danger }) => (
 );
 
 const ProfileScreen = ({ navigation }) => {
-  const { profile, user, saveProfile, signOut, isAdmin } = useAuth();
+  const { profile, user, saveProfile, signOut, retryDeletion, isAdmin } = useAuth();
   const [matchCount, setMatchCount] = useState(0);
   const [likedCount, setLikedCount] = useState(0);
+  const [deleteVisible, setDeleteVisible] = useState(false);
+  const [deletePassword, setDeletePassword] = useState('');
+  const [deleteError, setDeleteError] = useState(null);
+  const [deleting, setDeleting] = useState(false);
 
   useFocusEffect(
     useCallback(() => {
@@ -87,6 +105,111 @@ const ProfileScreen = ({ navigation }) => {
       { text: 'Cancel', style: 'cancel' },
       { text: 'Log out', style: 'destructive', onPress: signOut },
     ]);
+  };
+
+  /**
+   * Step 1 of account deletion: a clear, permanent warning before anything is
+   * touched. The password prompt only opens after the member confirms here.
+   */
+  const confirmDeleteAccount = () => {
+    Alert.alert(
+      'Delete your account?',
+      'This is permanent. Your profile, photos, matches, conversations, messages and Gold membership will be deleted. You will not be able to sign back in or recover your account.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Continue',
+          style: 'destructive',
+          onPress: () => {
+            setDeleteError(null);
+            setDeletePassword('');
+            setDeleteVisible(true);
+          },
+        },
+      ],
+    );
+  };
+
+  /** Send a reset link so a member who forgot their password is not stuck. */
+  const handleDeletePasswordReset = async () => {
+    const email = user?.email;
+    if (!email) {
+      setDeleteError('We could not send a reset link. Please contact support.');
+      return;
+    }
+    try {
+      await authService.sendPasswordReset(email);
+      Alert.alert(
+        'Reset link sent',
+        `We sent a password reset link to ${email}. Use it to sign in again, then delete your account.`,
+      );
+    } catch (error) {
+      setDeleteError(error?.message || 'We could not send that reset link. Please try again.');
+    }
+  };
+
+  /** Open the public deletion policy page (the same page linked from stores). */
+  const openDeletionPolicy = async () => {
+    const url = accountService.getDeletionInstructionsUrl();
+    try {
+      const supported = await Linking.canOpenURL(url);
+      if (!supported) throw new Error('unsupported');
+      await Linking.openURL(url);
+    } catch {
+      Alert.alert('Deletion policy', `Open this link to read what is deleted and what is kept:\n\n${url}`);
+    }
+  };
+
+  /**
+   * Step 2: verify the password, delete the data on the backend, then remove
+   * the sign-in. The order matters — if the server deletion fails the member
+   * stays signed in and can retry; the account is only destroyed once the
+   * data deletion has actually succeeded.
+   */
+  const handleDeleteAccount = async () => {
+    if (!deletePassword) {
+      setDeleteError('Enter your password to continue.');
+      return;
+    }
+
+    setDeleting(true);
+    setDeleteError(null);
+
+    try {
+      // Re-authenticate, delete the data, then remove the sign-in. A partial
+      // failure moves the root gate to the resumable deletion screen instead
+      // of leaving this (soon deleted) profile as the only retry path.
+      await retryDeletion(deletePassword);
+
+      setDeleteVisible(false);
+      setDeletePassword('');
+      Alert.alert('Account deleted', 'Your account and your data have been permanently deleted.');
+    } catch (error) {
+      const code = error?.code || '';
+
+      if (code === 'requires-recent-login') {
+        setDeleteError('Please sign in again to confirm you want to delete your account.');
+        Alert.alert(
+          'Sign in again',
+          'For your security, please sign in again before deleting your account.',
+          [
+            { text: 'Cancel', style: 'cancel' },
+            { text: 'Sign out', style: 'destructive', onPress: signOut },
+          ],
+        );
+      } else if (code === 'PARTIAL_DELETION') {
+        // Honest: most of the data is already gone, so "nothing was lost"
+        // would be a lie. The deletion must be finished, and the backend keeps
+        // a durable state so it can be resumed even after signing out.
+        setDeleteError(
+          'Your account deletion is not finished. Some of your data has already been deleted, so you must retry the deletion to finish removing your account.',
+        );
+      } else {
+        setDeleteError(error?.message || 'We could not delete your account. Please try again.');
+      }
+    } finally {
+      setDeleting(false);
+    }
   };
 
   return (
@@ -214,11 +337,116 @@ const ProfileScreen = ({ navigation }) => {
         </View>
 
         <View style={styles.menu}>
-          <MenuRow emoji="🚪" label="Log out" onPress={confirmLogout} danger right={<Ionicons name="log-out-outline" size={18} color={colors.danger} />} />
+          <MenuRow
+            emoji="🚪"
+            label="Log out"
+            onPress={confirmLogout}
+            danger
+            right={<Ionicons name="log-out-outline" size={18} color={colors.danger} />}
+          />
+          <MenuRow
+            emoji="🗑️"
+            label="Delete account"
+            sub="Permanently remove your account and all your data"
+            onPress={confirmDeleteAccount}
+            danger
+            right={<Ionicons name="trash-outline" size={18} color={colors.danger} />}
+          />
         </View>
 
         <Text style={styles.version}>Malindi Singles Connect v1.0.0 · Meet. Match. Connect. Today.</Text>
       </ScrollView>
+
+      <Modal
+        visible={deleteVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => {
+          if (!deleting) setDeleteVisible(false);
+        }}
+      >
+        <View style={styles.modalBackdrop}>
+          <KeyboardAvoidingView
+            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+            style={styles.modalCardWrap}
+          >
+            <View style={styles.modalCard}>
+              <View style={styles.modalHeader}>
+                <Ionicons name="trash-outline" size={19} color={colors.danger} />
+                <Text style={styles.modalTitle}>Delete your account</Text>
+              </View>
+
+              <Text style={styles.modalText}>
+                Your profile, photos, verification selfie, matches, conversations, messages and Gold membership will be
+                permanently deleted. Other members are not affected. This cannot be undone.
+              </Text>
+
+              <Text style={styles.modalLabel}>Confirm your password</Text>
+              <TextInput
+                style={styles.modalInput}
+                value={deletePassword}
+                onChangeText={(text) => {
+                  setDeletePassword(text);
+                  if (deleteError) setDeleteError(null);
+                }}
+                placeholder="Your password"
+                placeholderTextColor={colors.textMuted}
+                secureTextEntry
+                autoCapitalize="none"
+                autoCorrect={false}
+                editable={!deleting}
+                returnKeyType="done"
+                onSubmitEditing={handleDeleteAccount}
+              />
+
+              {deleteError ? <Text style={styles.modalError}>{deleteError}</Text> : null}
+
+              <TouchableOpacity
+                style={styles.forgotLink}
+                onPress={handleDeletePasswordReset}
+                disabled={deleting}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
+                <Text style={styles.forgotLinkText}>Forgot your password? Send me a reset link</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.forgotLink}
+                onPress={openDeletionPolicy}
+                disabled={deleting}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
+                <Text style={styles.forgotLinkText}>Read the full deletion policy</Text>
+              </TouchableOpacity>
+
+              <View style={styles.modalActions}>
+                <TouchableOpacity
+                  style={styles.modalCancel}
+                  onPress={() => setDeleteVisible(false)}
+                  disabled={deleting}
+                >
+                  <Text style={styles.modalCancelText}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.modalDelete, (deleting || !deletePassword) && styles.modalDeleteBusy]}
+                  onPress={handleDeleteAccount}
+                  disabled={deleting || !deletePassword}
+                >
+                  {deleting ? (
+                    <ActivityIndicator size="small" color={colors.white} />
+                  ) : (
+                    <Text style={styles.modalDeleteText}>Delete permanently</Text>
+                  )}
+                </TouchableOpacity>
+              </View>
+
+              <Text style={styles.modalFootNote}>
+                You will be signed out once the deletion completes.
+              </Text>
+            </View>
+          </KeyboardAvoidingView>
+        </View>
+      </Modal>
     </Screen>
   );
 };
@@ -312,6 +540,60 @@ const styles = StyleSheet.create({
   menuText: { flex: 1, marginRight: spacing.sm },
   menuLabel: { color: colors.text, fontSize: 15, fontWeight: '600' },
   menuSub: { color: colors.textMuted, fontSize: 12, marginTop: 1 },
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(4, 7, 16, 0.82)',
+    justifyContent: 'center',
+    padding: spacing.lg,
+  },
+  modalCardWrap: { width: '100%', maxWidth: 440, alignSelf: 'center' },
+  modalCard: {
+    backgroundColor: colors.surface,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: spacing.lg,
+  },
+  modalHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: spacing.sm },
+  modalTitle: { color: colors.text, fontSize: 18, fontWeight: '800' },
+  modalText: { color: colors.textSecondary, fontSize: 13, lineHeight: 19, marginBottom: spacing.lg },
+  modalLabel: { color: colors.text, fontSize: 13, fontWeight: '700', marginBottom: spacing.xs },
+  modalInput: {
+    backgroundColor: colors.surfaceHigh,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    color: colors.text,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.md,
+    fontSize: 15,
+  },
+  modalError: { color: colors.danger, fontSize: 13, fontWeight: '600', marginTop: spacing.sm },
+  forgotLink: { marginTop: spacing.md },
+  forgotLinkText: { color: colors.primary, fontSize: 13, fontWeight: '600' },
+  modalActions: { flexDirection: 'row', gap: spacing.md, marginTop: spacing.lg },
+  modalCancel: {
+    flex: 1,
+    paddingVertical: spacing.md,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  modalCancelText: { color: colors.text, fontWeight: '700', fontSize: 15 },
+  modalDelete: {
+    flex: 1,
+    paddingVertical: spacing.md,
+    borderRadius: radius.md,
+    backgroundColor: colors.danger,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 46,
+  },
+  modalDeleteBusy: { opacity: 0.65 },
+  modalDeleteText: { color: colors.white, fontWeight: '800', fontSize: 15 },
+  modalFootNote: { color: colors.textMuted, fontSize: 11, marginTop: spacing.md, textAlign: 'center' },
   version: { color: colors.textMuted, fontSize: 11, textAlign: 'center', marginTop: spacing.xl },
 });
 

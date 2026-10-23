@@ -86,6 +86,21 @@ service cloud.firestore {
         .hasAny(['uid', 'gold', 'premium', 'plan', 'role']);
     }
 
+    /**
+     * Durable account-deletion state, written only by the backend with Admin
+     * credentials (deletionRequests/{uid}, never readable by clients).
+     *
+     * While it exists, the member's profile may not be (re)created: a deletion
+     * that was interrupted must be finished, never silently undone by the
+     * onboarding flow after the member signs out and back in.
+     */
+    function deletionInProgress() {
+      return signedIn() &&
+        exists(/databases/$(database)/documents/deletionRequests/$(uid())) &&
+        get(/databases/$(database)/documents/deletionRequests/$(uid())).data.state in
+          ['pending', 'completed'];
+    }
+
     /* ---------------------------------------------------------------- *
      * Private profile data — date of birth + verification selfie live in *
      * profiles/{uid}/private/data, readable by the owner and admins only. *
@@ -212,6 +227,7 @@ service cloud.firestore {
       // (same atomic batch), so `dateOfBirth` is never exposed and the derived
       // `age` is guaranteed to match the owner-only date of birth.
       allow create: if signedIn() && uid() == userId &&
+        !deletionInProgress() &&
         request.resource.data.uid == userId &&
         !request.resource.data.keys().hasAny(['gold', 'premium', 'plan', 'role', 'dateOfBirth', 'verificationSelfie']) &&
         request.resource.data.age is int &&
@@ -222,6 +238,7 @@ service cloud.firestore {
       // Owners edit themselves, admins run verification/suspension. If the
       // derived age changes it must still equal the private date of birth.
       allow update: if signedIn() && (uid() == userId || isAdmin()) &&
+        !deletionInProgress() &&
         profileIsWritable() &&
         sensitiveFieldsStayPrivate() &&
         (
@@ -245,6 +262,7 @@ service cloud.firestore {
         allow list: if false;
 
         allow create: if signedIn() && uid() == userId && docId == 'data' &&
+          !deletionInProgress() &&
           request.resource.data.uid == userId &&
           request.resource.data.dateOfBirth is timestamp &&
           ageFromDob(request.resource.data.dateOfBirth) >= 18 &&
@@ -716,6 +734,17 @@ service cloud.firestore {
     match /payments/{paymentId} {
       allow read: if isAdmin();
       allow write: if false;
+    }
+
+    /* ---------------------------------------------------------------- *
+     * deletionRequests/{uid} — durable account-deletion state            *
+     * ---------------------------------------------------------------- */
+
+    // Written and read exclusively by the backend (Admin SDK bypasses these
+    // rules). Clients must never be able to clear a deletion marker, which
+    // would let them recreate a half-deleted profile.
+    match /deletionRequests/{userId} {
+      allow read, write: if false;
     }
 
     /* ---------------------------------------------------------------- *

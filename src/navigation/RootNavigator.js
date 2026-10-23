@@ -6,17 +6,23 @@ import AuthStack from './AuthStack';
 import OnboardingStack from './OnboardingStack';
 import Logo from '../components/Logo';
 import { useAuth } from '../context/AuthContext';
+import DeletionPendingScreen from '../screens/account/DeletionPendingScreen';
 import { colors, spacing } from '../theme';
 
 /**
  * Root gate:
  *  restoring session -> splash
  *  no user           -> auth stack
+ *  deletion state    -> pending-deletion screen (never onboarding!)
  *  profile incomplete-> onboarding
  *  otherwise         -> main app
+ *
+ * The deletion check comes BEFORE onboarding on purpose: onboarding saves a
+ * profile, and saving a profile recreates `profiles/{uid}`. An interrupted
+ * deletion must be resumed, not silently undone.
  */
 const RootNavigator = () => {
-  const { initializing, user, profileComplete, profileLoaded } = useAuth();
+  const { initializing, user, profileComplete, profileLoaded, deletionState } = useAuth();
 
   if (initializing || (user && !profileLoaded)) {
     return (
@@ -29,6 +35,9 @@ const RootNavigator = () => {
   }
 
   if (!user) return <AuthStack />;
+  if (deletionState && deletionState !== 'none') {
+    return <DeletionPendingScreen state={deletionState} />;
+  }
   if (!profileComplete) return <OnboardingStack />;
   return <AppStack />;
 };

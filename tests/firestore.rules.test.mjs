@@ -346,6 +346,53 @@ await denies('admin client cannot write a private selfie path', () =>
     verificationSelfiePath: `${ALICE}/verification/selfie_1.jpg`,
   }),
 );
+
+// --- account deletion: a pending marker blocks profile recreation ---------
+// The backend writes deletionRequests/{uid} before it starts deleting. While
+// that marker exists the member must NOT be able to recreate their profile
+// (onboarding after signing out and back in used to do exactly that).
+const DELETED = 'deleteduid014';
+const DELETED_DONE = 'deleteduid015';
+await env.withSecurityRulesDisabled(async (ctx) => {
+  const db = ctx.firestore();
+  await db.doc(`profiles/${DELETED}/private/data`).set({
+    uid: DELETED, dateOfBirth: new Date('1990-01-01T00:00:00Z'),
+  });
+  await db.doc(`deletionRequests/${DELETED}`).set({
+    uid: DELETED, state: 'pending', failedSteps: ['profilePhotos'],
+  });
+  await db.doc(`profiles/${DELETED_DONE}/private/data`).set({
+    uid: DELETED_DONE, dateOfBirth: new Date('1990-01-01T00:00:00Z'),
+  });
+  await db.doc(`deletionRequests/${DELETED_DONE}`).set({
+    uid: DELETED_DONE, state: 'completed', failedSteps: [],
+  });
+});
+const newProfile = (uid) => ({
+  uid, fullName: 'Deleted', photos: [], bio: '', gender: 'male', interestedIn: ['female'],
+  area: 'malindi-town', age: new Date().getUTCFullYear() - 1990,
+  lastActiveAt: new Date().toISOString(), createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+});
+await denies('a pending deletion blocks profile recreation (onboarding)', () =>
+  asUser(DELETED).doc(`profiles/${DELETED}`).set(newProfile(DELETED)),
+);
+await denies('a pending deletion blocks the private profile write', () =>
+  asUser(DELETED).doc(`profiles/${DELETED}/private/data`).set({
+    uid: DELETED, dateOfBirth: new Date('1990-01-01T00:00:00Z'),
+  }),
+);
+await denies('a completed deletion also blocks profile recreation', () =>
+  asUser(DELETED_DONE).doc(`profiles/${DELETED_DONE}`).set(newProfile(DELETED_DONE)),
+);
+await denies('clients cannot read the deletion state', () =>
+  asUser(ALICE).doc(`deletionRequests/${ALICE}`).get(),
+);
+await denies('clients cannot clear a deletion marker', () =>
+  asUser(DELETED).doc(`deletionRequests/${DELETED}`).delete(),
+);
+await denies('clients cannot create a deletion marker', () =>
+  asUser(CAROL).doc(`deletionRequests/${CAROL}`).set({ uid: CAROL, state: 'none' }),
+);
 await denies('legacy public date of birth cannot be rewritten', () =>
   asUser(LEGACY).doc(`profiles/${LEGACY}`).update({ dateOfBirth: '2001-01-01' }),
 );

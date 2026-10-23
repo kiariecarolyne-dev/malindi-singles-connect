@@ -17,6 +17,7 @@ import * as firebaseNotificationService from './firebase/notificationService';
 import * as firebaseAdminService from './firebase/adminService';
 import * as firebasePremiumService from './firebase/premiumService';
 import * as firebaseGoldCircleService from './firebase/goldCircleService';
+import * as backendAccountService from './backend/accountService';
 
 export const authService = firebaseAuthService;
 export const profileService = firebaseProfileService;
@@ -29,5 +30,9 @@ export const notificationService = firebaseNotificationService;
 export const adminService = firebaseAdminService;
 export const premiumService = firebasePremiumService;
 export const goldCircleService = firebaseGoldCircleService;
+
+// Backend services (the mobile app never touches Firestore/Storage directly
+// for these - the backend owns the rules and the secrets).
+export const accountService = backendAccountService;
 
 export const IS_DEMO = false;

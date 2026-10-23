@@ -8,7 +8,9 @@
 import {
   createUserWithEmailAndPassword,
   deleteUser,
+  EmailAuthProvider,
   onAuthStateChanged as firebaseOnAuthStateChanged,
+  reauthenticateWithCredential,
   sendPasswordResetEmail,
   signInWithEmailAndPassword as firebaseSignIn,
   signOut as firebaseSignOut,
@@ -343,6 +345,85 @@ export const sendPasswordReset = async (email) => {
   return { sent: true, demo: false };
 };
 
+/**
+ * Re-authenticate the signed-in member with their password.
+ *
+ * Firebase requires a *recent* sign-in before it will delete an account, so
+ * account deletion always starts here. The thrown error carries
+ * `error.code` so the UI can tell a wrong password from a locked-out account.
+ */
+export const reauthenticate = async (password) => {
+  assertConfigured();
+  const auth = getFirebaseAuth();
+  const user = auth.currentUser;
+  if (!user) {
+    throw new Error('You must be signed in to continue.');
+  }
+  if (!user.email) {
+    throw new Error('This account cannot be confirmed. Please contact support.');
+  }
+  if (!password) {
+    throw new Error('Enter your password to continue.');
+  }
+
+  try {
+    const credential = EmailAuthProvider.credential(user.email, password);
+    await reauthenticateWithCredential(user, credential);
+  } catch (error) {
+    const code = error?.code || '';
+    if (code === 'auth/wrong-password' || code === 'auth/invalid-credential' || code === 'auth/user-mismatch') {
+      throw new Error('That password is not correct. Please try again.');
+    }
+    const wrapped = new Error(friendlyError(error, 'Could not confirm your identity. Please try again.'));
+    wrapped.code = code;
+    throw wrapped;
+  }
+
+  return true;
+};
+
+/**
+ * Remove the Firebase Authentication account for the signed-in member.
+ *
+ * This is deliberately done on the client with the Firebase SDK: Firebase
+ * then enforces its own "recent sign-in" rule (we re-authenticate first) and
+ * the credential never leaves the device.
+ *
+ * `auth/user-not-found` is treated as success - the account is already gone.
+ * `auth/requires-recent-login` is surfaced with `error.code` so the UI can
+ * ask the member to sign in again.
+ */
+export const deleteCurrentAccount = async () => {
+  assertConfigured();
+  const auth = getFirebaseAuth();
+  const user = auth.currentUser;
+  if (!user) {
+    return { deleted: true, alreadyGone: true };
+  }
+
+  try {
+    await deleteUser(user);
+  } catch (error) {
+    const code = error?.code || '';
+    if (code === 'auth/user-not-found') {
+      // Already deleted - nothing left to do.
+    } else if (code === 'auth/requires-recent-login') {
+      const wrapped = new Error('Please sign in again to confirm you want to delete your account.');
+      wrapped.code = 'requires-recent-login';
+      throw wrapped;
+    } else {
+      const wrapped = new Error(friendlyError(error, 'Could not remove your account. Please try again.'));
+      wrapped.code = code;
+      throw wrapped;
+    }
+  }
+
+  currentUser = null;
+  watchUserDoc(null);
+  emit();
+  return { deleted: true, alreadyGone: false };
+};
+
 export default {
   onAuthStateChanged,
   getCurrentUser,
@@ -351,4 +432,6 @@ export default {
   signUp,
   signOut,
   sendPasswordReset,
+  reauthenticate,
+  deleteCurrentAccount,
 };

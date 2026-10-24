@@ -223,7 +223,9 @@ const AdminScreen = ({ navigation }) => {
                       <View style={styles.personRow}>
                         <Avatar uri={r.target?.photos?.[0]} name={r.target?.fullName} size={38} />
                         <View style={{ flex: 1 }}>
-                          <Text style={styles.personName}>{r.target?.fullName || 'Unknown user'}</Text>
+                          <Text style={styles.personName}>
+                            {r.target?.fullName || (r.targetUid ? 'Unknown user' : 'Anonymous Gold Circle post')}
+                          </Text>
                           <Text style={styles.personSub}>
                             reported by {r.reporter?.fullName || 'a member'}
                           </Text>
@@ -238,14 +240,16 @@ const AdminScreen = ({ navigation }) => {
                         >
                           <Text style={styles.dismissText}>Dismiss</Text>
                         </TouchableOpacity>
-                        <TouchableOpacity
-                          style={[styles.actionBtn, styles.suspendBtn]}
-                          onPress={() => suspendTarget(r)}
-                          disabled={busy}
-                        >
-                          <Ionicons name="ban" size={14} color={colors.white} />
-                          <Text style={styles.suspendText}>Suspend user</Text>
-                        </TouchableOpacity>
+                        {r.targetUid ? (
+                          <TouchableOpacity
+                            style={[styles.actionBtn, styles.suspendBtn]}
+                            onPress={() => suspendTarget(r)}
+                            disabled={busy}
+                          >
+                            <Ionicons name="ban" size={14} color={colors.white} />
+                            <Text style={styles.suspendText}>Suspend user</Text>
+                          </TouchableOpacity>
+                        ) : null}
                       </View>
                     </View>
                   );

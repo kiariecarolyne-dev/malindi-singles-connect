@@ -576,9 +576,17 @@ service cloud.firestore {
         request.resource.data.keys().hasOnly([
           'authorUid', 'authorName', 'authorAvatar', 'text', 'category',
           'imageUrl', 'imagePath', 'sharedWhatsApp', 'whatsapp',
-          'likedBy', 'likeCount', 'commentCount', 'createdAt', 'updatedAt'
+          'likedBy', 'likeCount', 'commentCount', 'createdAt', 'updatedAt',
+          'isAnonymous', 'location', 'budget'
         ]) &&
-        request.resource.data.authorUid == uid() &&
+        (
+          (request.resource.data.authorUid == uid() && request.resource.data.isAnonymous != true) ||
+          (request.resource.data.authorUid == null && request.resource.data.isAnonymous == true &&
+            existsAfter(/databases/$(database)/documents/goldCirclePostAuthors/$(postId)) &&
+            getAfter(/databases/$(database)/documents/goldCirclePostAuthors/$(postId)).data.uid == uid() &&
+            getAfter(/databases/$(database)/documents/goldCirclePostAuthors/$(postId)).data.keys().hasOnly(['uid', 'createdAt']) &&
+            getAfter(/databases/$(database)/documents/goldCirclePostAuthors/$(postId)).data.createdAt == request.time)
+        ) &&
         request.resource.data.authorName is string &&
         request.resource.data.authorName.size() > 0 &&
         request.resource.data.authorName.size() <= 100 &&
@@ -593,12 +601,15 @@ service cloud.firestore {
             request.resource.data.imageUrl.size() > 0
           )
         ) &&
-        request.resource.data.category in ['discussion', 'question', 'experience', 'story', 'photo'] &&
+        request.resource.data.category in ['for_you', 'love_story', 'date_idea', 'relationship', 'style_beauty', 'couple_moment', 'confession', 'love_game', 'community', 'discussion', 'question', 'experience', 'story', 'photo'] &&
         (request.resource.data.imageUrl == null || request.resource.data.imageUrl is string) &&
         (request.resource.data.imagePath == null || request.resource.data.imagePath is string) &&
         request.resource.data.sharedWhatsApp is bool &&
         (request.resource.data.whatsapp == null ||
           (request.resource.data.whatsapp is string && request.resource.data.whatsapp.size() <= 30)) &&
+        (request.resource.data.isAnonymous == null || request.resource.data.isAnonymous is bool) &&
+        (request.resource.data.location == null || (request.resource.data.location is string && request.resource.data.location.size() <= 80)) &&
+        (request.resource.data.budget == null || (request.resource.data.budget is string && request.resource.data.budget.size() <= 40)) &&
         request.resource.data.likedBy is list &&
         request.resource.data.likedBy.size() == 0 &&
         request.resource.data.likeCount == 0 &&
@@ -611,7 +622,7 @@ service cloud.firestore {
         // array, and likeCount always mirrors likedBy.size(). A block in
         // either direction stops the like entirely.
         (
-          !blockedBetween(uid(), resource.data.authorUid) &&
+          (resource.data.authorUid == null || !blockedBetween(uid(), resource.data.authorUid)) &&
           request.resource.data.diff(resource.data).affectedKeys()
             .hasOnly(['likedBy', 'likeCount']) &&
           request.resource.data.likeCount == request.resource.data.likedBy.size() &&
@@ -646,9 +657,12 @@ service cloud.firestore {
         )
       );
 
-      // Authors own their post; admins moderate by removal.
+      // Authors own their post; admins moderate by removal. Anonymous authors
+      // are resolved through goldCirclePostAuthors/{postId}.
       allow delete: if isAdmin() ||
-        (isGoldMember() && resource.data.authorUid == uid());
+        (isGoldMember() && resource.data.authorUid == uid()) ||
+        (isGoldMember() && exists(/databases/$(database)/documents/goldCirclePostAuthors/$(postId)) &&
+          get(/databases/$(database)/documents/goldCirclePostAuthors/$(postId)).data.uid == uid());
 
       match /comments/{commentId} {
         allow get, list: if isGoldMember() || isAdmin();
@@ -672,8 +686,11 @@ service cloud.firestore {
           exists(/databases/$(database)/documents/goldCirclePosts/$(postId)) &&
           // Respect blocks both ways: a blocked member cannot comment on the
           // blocker's post, and the blocker cannot comment on theirs.
-          !blockedBetween(uid(),
-            get(/databases/$(database)/documents/goldCirclePosts/$(postId)).data.authorUid);
+          (
+            get(/databases/$(database)/documents/goldCirclePosts/$(postId)).data.authorUid == null ||
+            !blockedBetween(uid(),
+              get(/databases/$(database)/documents/goldCirclePosts/$(postId)).data.authorUid)
+          );
 
         // Comments are immutable — edits would rewrite the conversation.
         allow update: if false;
@@ -734,8 +751,151 @@ service cloud.firestore {
     }
 
     /* ---------------------------------------------------------------- *
-     * payments/{id} — written only by the backend                        *
+     * goldCirclePostAuthors/{postId} — private author map for anonymous
+     * confessions/love notes. Genuine identity protection: only the original
+     * author (and admins) may read the uid.
      * ---------------------------------------------------------------- */
+    match /goldCirclePostAuthors/{postId} {
+      allow get: if isAdmin() || (isGoldMember() && resource != null && resource.data.uid == uid());
+      allow list: if isAdmin();
+      allow create: if isGoldMember() &&
+        request.resource.data.keys().hasOnly(['uid', 'createdAt']) &&
+        request.resource.data.uid == uid() &&
+        request.resource.data.createdAt == request.time &&
+        existsAfter(/databases/$(database)/documents/goldCirclePosts/$(postId)) &&
+        getAfter(/databases/$(database)/documents/goldCirclePosts/$(postId)).data.authorUid == null;
+      allow update: if false;
+      allow delete: if isAdmin() || (isGoldMember() && resource.data.uid == uid());
+    }
+
+    /* ---------------------------------------------------------------- *
+     * goldCircleSaves/{saveId} — per-member saved posts                    *
+     * ---------------------------------------------------------------- */
+    match /goldCircleSaves/{saveId} {
+      // A missing doc must still be readable so `isPostSaved` can return
+      // false without a permission error; existing docs stay private.
+      allow get: if isGoldMember() && (resource == null || isAdmin() || resource.data.uid == uid());
+      allow list: if isGoldMember() && (isAdmin() || resource.data.uid == uid());
+      allow create: if isGoldMember() &&
+        request.resource.data.keys().hasOnly(['uid', 'postId', 'createdAt']) &&
+        request.resource.data.uid == uid() &&
+        request.resource.data.postId is string &&
+        request.resource.data.createdAt == request.time;
+      allow update: if false;
+      allow delete: if isGoldMember() && resource.data.uid == uid();
+    }
+
+    /* ---------------------------------------------------------------- *
+     * goldCircleChallengeCompletions/{id} — Daily Love Challenge        *
+     * ---------------------------------------------------------------- */
+    match /goldCircleChallengeCompletions/{completionId} {
+      allow get: if isGoldMember() && (resource == null || isAdmin() || resource.data.uid == uid());
+      allow list: if isGoldMember() && (isAdmin() || resource.data.uid == uid());
+      allow create: if isGoldMember() &&
+        request.resource.data.keys().hasOnly(['uid', 'dayKey', 'completedAt']) &&
+        request.resource.data.uid == uid() &&
+        request.resource.data.dayKey is string &&
+        request.resource.data.completedAt == request.time;
+      allow update, delete: if false;
+    }
+
+    /* ---------------------------------------------------------------- *
+     * goldCircleGameTallies/{dayKey} — Green Flag vs Red Flag          *
+     * ---------------------------------------------------------------- */
+    match /goldCircleGameTallies/{dayKey} {
+      allow get, list: if isGoldMember() || isAdmin();
+      allow create: if isGoldMember() &&
+        request.resource.data.keys().hasOnly(['counts', 'sum', 'updatedAt']) &&
+        request.resource.data.counts is list &&
+        request.resource.data.counts.size() == 2 &&
+        request.resource.data.sum == 1 &&
+        existsAfter(/databases/$(database)/documents/goldCircleGameTallies/$(dayKey)/votes/$(uid()));
+      allow update: if isGoldMember() &&
+        request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['counts', 'sum', 'updatedAt']) &&
+        request.resource.data.counts.size() == resource.data.counts.size() &&
+        request.resource.data.sum == resource.data.sum + 1 &&
+        !exists(/databases/$(database)/documents/goldCircleGameTallies/$(dayKey)/votes/$(uid())) &&
+        existsAfter(/databases/$(database)/documents/goldCircleGameTallies/$(dayKey)/votes/$(uid()));
+      allow delete: if isAdmin();
+
+      match /votes/{voterUid} {
+        allow get: if isGoldMember() && voterUid == uid();
+        allow create: if isGoldMember() &&
+          request.auth.uid == voterUid &&
+          request.resource.data.keys().hasOnly(['option', 'createdAt']) &&
+          request.resource.data.option is int &&
+          (request.resource.data.option == 0 || request.resource.data.option == 1) &&
+          request.resource.data.createdAt == request.time;
+        allow update, delete: if false;
+      }
+    }
+
+    /* ---------------------------------------------------------------- *
+     * goldCircleSideChoices/{dayKey} — Choose a Side                   *
+     * ---------------------------------------------------------------- */
+    match /goldCircleSideChoices/{dayKey} {
+      allow get, list: if isGoldMember() || isAdmin();
+      allow create: if isGoldMember() &&
+        request.resource.data.keys().hasOnly(['counts', 'sum', 'updatedAt']) &&
+        request.resource.data.counts is list &&
+        request.resource.data.counts.size() == 2 &&
+        request.resource.data.sum == 1 &&
+        existsAfter(/databases/$(database)/documents/goldCircleSideChoices/$(dayKey)/votes/$(uid()));
+      allow update: if isGoldMember() &&
+        request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['counts', 'sum', 'updatedAt']) &&
+        request.resource.data.counts.size() == resource.data.counts.size() &&
+        request.resource.data.sum == resource.data.sum + 1 &&
+        !exists(/databases/$(database)/documents/goldCircleSideChoices/$(dayKey)/votes/$(uid())) &&
+        existsAfter(/databases/$(database)/documents/goldCircleSideChoices/$(dayKey)/votes/$(uid()));
+      allow delete: if isAdmin();
+
+      match /votes/{voterUid} {
+        allow get: if isGoldMember() && voterUid == uid();
+        allow create: if isGoldMember() &&
+          request.auth.uid == voterUid &&
+          request.resource.data.keys().hasOnly(['option', 'createdAt']) &&
+          request.resource.data.option is int &&
+          (request.resource.data.option == 0 || request.resource.data.option == 1) &&
+          request.resource.data.createdAt == request.time;
+        allow update, delete: if false;
+      }
+    }
+
+    /* ---------------------------------------------------------------- *
+     * goldCirclePollTallies/{pollKey} — Relationship Polls              *
+     * ---------------------------------------------------------------- */
+    match /goldCirclePollTallies/{pollKey} {
+      allow get, list: if isGoldMember() || isAdmin();
+      allow create: if isGoldMember() &&
+        request.resource.data.keys().hasOnly(['counts', 'sum', 'updatedAt']) &&
+        request.resource.data.counts is list &&
+        request.resource.data.counts.size() >= 2 &&
+        request.resource.data.counts.size() <= 6 &&
+        request.resource.data.sum == 1 &&
+        existsAfter(/databases/$(database)/documents/goldCirclePollTallies/$(pollKey)/votes/$(uid()));
+      allow update: if isGoldMember() &&
+        request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['counts', 'sum', 'updatedAt']) &&
+        request.resource.data.counts.size() == resource.data.counts.size() &&
+        request.resource.data.sum == resource.data.sum + 1 &&
+        !exists(/databases/$(database)/documents/goldCirclePollTallies/$(pollKey)/votes/$(uid())) &&
+        existsAfter(/databases/$(database)/documents/goldCirclePollTallies/$(pollKey)/votes/$(uid()));
+      allow delete: if isAdmin();
+
+      match /votes/{voterUid} {
+        allow get: if isGoldMember() && voterUid == uid();
+        allow create: if isGoldMember() &&
+          request.auth.uid == voterUid &&
+          request.resource.data.keys().hasOnly(['option', 'createdAt']) &&
+          request.resource.data.option is int &&
+          request.resource.data.option >= 0 &&
+          request.resource.data.option < 6 &&
+          request.resource.data.createdAt == request.time;
+        allow update, delete: if false;
+      }
+    }
 
     match /payments/{paymentId} {
       allow read: if isAdmin();

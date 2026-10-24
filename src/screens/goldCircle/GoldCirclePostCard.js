@@ -1,5 +1,5 @@
 import React from 'react';
-import { Image, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Image, Share, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
 import Avatar from '../../components/Avatar';
@@ -31,6 +31,8 @@ const authorMeta = (post) =>
 const GoldCirclePostCard = ({
   post,
   viewerUid,
+  saved,
+  onPressSave,
   onPressAuthor,
   onPressLike,
   onPressComments,
@@ -39,12 +41,14 @@ const GoldCirclePostCard = ({
   const liked = Array.isArray(post.likedBy) && post.likedBy.includes(viewerUid);
   const category = categoryOf(post.category);
   const isOwn = post.authorUid === viewerUid;
+  const isAnonymous = Boolean(post.isAnonymous) && post.authorUid !== viewerUid;
 
   return (
     <View style={styles.card}>
       <TouchableOpacity
         style={styles.header}
-        activeOpacity={0.7}
+        activeOpacity={isAnonymous ? 1 : 0.7}
+        disabled={isAnonymous}
         onPress={() => onPressAuthor?.(post)}
       >
         <Avatar uri={post.authorAvatar} name={post.authorName} size={36} ringColor={colors.gold} />
@@ -73,6 +77,23 @@ const GoldCirclePostCard = ({
         <Image source={{ uri: post.imageUrl }} style={styles.photo} resizeMode="contain" />
       ) : null}
 
+      {post.location || post.budget ? (
+        <View style={styles.metaRow}>
+          {post.location ? (
+            <View style={styles.metaChip}>
+              <Ionicons name="location-outline" size={12} color={colors.textSecondary} />
+              <Text style={styles.metaText}>{post.location}</Text>
+            </View>
+          ) : null}
+          {post.budget ? (
+            <View style={styles.metaChip}>
+              <Ionicons name="wallet-outline" size={12} color={colors.textSecondary} />
+              <Text style={styles.metaText}>{post.budget}</Text>
+            </View>
+          ) : null}
+        </View>
+      ) : null}
+
       {post.sharedWhatsApp && post.whatsapp ? (
         <View style={styles.whatsapp}>
           <Ionicons name="logo-whatsapp" size={13} color={colors.success} />
@@ -96,6 +117,32 @@ const GoldCirclePostCard = ({
         <TouchableOpacity style={styles.action} onPress={() => onPressComments(post)} activeOpacity={0.7}>
           <Ionicons name="chatbubble-outline" size={14} color={colors.textMuted} />
           <Text style={styles.actionText}>{post.commentCount || 0}</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity style={styles.action} onPress={() => onPressSave?.(post)} activeOpacity={0.7}>
+          <Ionicons
+            name={saved ? 'bookmark' : 'bookmark-outline'}
+            size={15}
+            color={saved ? colors.gold : colors.textMuted}
+          />
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={styles.action}
+          onPress={async () => {
+            try {
+              await Share.share({
+                message: `${post.text || ''}${post.location ? `\n📍 ${post.location}` : ''}${
+                  post.budget ? ` · ${post.budget}` : ''
+                }\n\n— ${post.authorName || 'Gold member'} on Gold Circle`,
+              });
+            } catch {
+              // Sharing cancelled or unavailable.
+            }
+          }}
+          activeOpacity={0.7}
+        >
+          <Ionicons name="share-outline" size={15} color={colors.textMuted} />
         </TouchableOpacity>
 
         <View style={styles.spacer} />
@@ -165,6 +212,18 @@ const styles = StyleSheet.create({
   },
   whatsappLabel: { color: colors.success, fontSize: 11, fontWeight: '700' },
   whatsappNumber: { color: colors.textSecondary, fontSize: 11, fontWeight: '600' },
+
+  metaRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs, marginTop: spacing.md },
+  metaChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: colors.surfaceLight,
+    borderRadius: radius.round,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 3,
+  },
+  metaText: { color: colors.textSecondary, fontSize: 11, fontWeight: '600' },
 
   actions: {
     flexDirection: 'row',

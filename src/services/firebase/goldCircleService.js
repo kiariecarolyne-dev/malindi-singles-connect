@@ -23,9 +23,9 @@
  * not used.
  */
 import {
-  addDoc,
   collection,
   deleteDoc,
+  setDoc,
   doc,
   getDoc,
   getDocs,
@@ -33,6 +33,7 @@ import {
   limit as fsLimit,
   orderBy,
   query,
+  where,
   runTransaction,
   serverTimestamp,
   startAfter,
@@ -44,15 +45,29 @@ import { profileAge } from '../../utils/age';
 import { uploadProfilePhotoViaBackend } from '../backend/photoService';
 import { deleteProfilePhoto } from '../supabase/storage';
 import { getDb } from './firebaseConfig';
-import { blockDocId, col, docRef, docsToModels, friendlyError } from './helpers';
+import { blockDocId, col, docRef, docToModel, docsToModels, friendlyError } from './helpers';
 import { fetchBlockedUids, fetchProfileDoc } from './deck';
 import * as premiumService from './premiumService';
 
 const POSTS = 'goldCirclePosts';
+const POST_AUTHORS = 'goldCirclePostAuthors';
 const DAILY = 'goldCircleDailyTopics';
+const SAVES = 'goldCircleSaves';
+const CHALLENGES = 'goldCircleChallengeCompletions';
+const GAMES = 'goldCircleGameTallies';
 
 /** Post categories shown in the composer and on every post. */
 export const CATEGORIES = [
+  { id: 'for_you', label: 'For You', emoji: '✨' },
+  { id: 'love_story', label: 'Love Stories', emoji: '💌' },
+  { id: 'date_idea', label: 'Date Ideas', emoji: '🌹' },
+  { id: 'relationship', label: 'Relationships', emoji: '💞' },
+  { id: 'style_beauty', label: 'Style & Beauty', emoji: '💄' },
+  { id: 'couple_moment', label: 'Couple Moments', emoji: '👩‍❤️‍👨' },
+  { id: 'confession', label: 'Confessions', emoji: '🤫' },
+  { id: 'love_game', label: 'Love Games', emoji: '🎮' },
+  { id: 'community', label: 'Community & Lifestyle', emoji: '🏝️' },
+  // Legacy ids kept for backward compatibility with existing posts.
   { id: 'discussion', label: 'Discussion', emoji: '💬' },
   { id: 'question', label: 'Question', emoji: '❓' },
   { id: 'experience', label: 'Dating experience', emoji: '💘' },
@@ -130,8 +145,10 @@ const validateImage = (image) => {
  * Feed reads                                                          *
  * ------------------------------------------------------------------ */
 
-const fetchPage = async (cursor) => {
-  const constraints = [orderBy('createdAt', 'desc'), fsLimit(LIMITS.goldCirclePageSize)];
+const fetchPage = async (cursor, category = null) => {
+  const constraints = [];
+  if (category && category !== 'for_you') constraints.push(where('category', '==', category));
+  constraints.push(orderBy('createdAt', 'desc'), fsLimit(LIMITS.goldCirclePageSize));
   if (cursor) constraints.unshift(startAfter(cursor));
   const snapshot = await getDocs(query(col(POSTS), ...constraints));
   const nextCursor =
@@ -148,25 +165,50 @@ const fetchPage = async (cursor) => {
  * misleading empty feed when the first page is entirely filtered out.
  */
 const hydratePage = async (rows, viewerUid) => {
-  const authorUids = [...new Set(rows.map((row) => row.authorUid).filter(Boolean))];
+  const anonymousRows = rows.filter((row) => row.isAnonymous);
+  const privateAuthorSnaps = await Promise.all(
+    anonymousRows.map(async (row) => {
+      try {
+        return await getDoc(doc(getDb(), POST_AUTHORS, row.id));
+      } catch {
+        // Identity-protected: non-authors (and the rules) deny this read.
+        return null;
+      }
+    }),
+  );
+  const privateAuthorByPost = new Map(
+    anonymousRows.map((row, index) => {
+      const snap = privateAuthorSnaps[index];
+      return [row.id, snap && snap.exists() ? snap.data()?.uid : null];
+    }),
+  );
+  const resolvedUids = rows.map((row) =>
+    row.isAnonymous ? privateAuthorByPost.get(row.id) || row.authorUid : row.authorUid,
+  );
+  const allAuthorUids = [...new Set(resolvedUids.filter(Boolean))];
   const [blocked, profiles] = await Promise.all([
     fetchBlockedUids(viewerUid),
-    Promise.all(authorUids.map((uid) => fetchProfileDoc(uid))),
+    Promise.all(allAuthorUids.map((uid) => fetchProfileDoc(uid))),
   ]);
-  const byUid = new Map(authorUids.map((uid, i) => [uid, profiles[i]]));
+  const byUid = new Map(allAuthorUids.map((uid, i) => [uid, profiles[i]]));
 
   const visible = [];
-  rows.forEach((row) => {
-    if (blocked.has(row.authorUid)) return;
-    const author = byUid.get(row.authorUid);
+  rows.forEach((row, index) => {
+    const resolvedAuthorUid = resolvedUids[index];
+    if (blocked.has(resolvedAuthorUid)) return;
+    const author = byUid.get(resolvedAuthorUid);
     if (author?.suspended) return;
     const age = author ? profileAge(author) : 0;
+    const anonymous = Boolean(row.isAnonymous);
+    const mask = anonymous && resolvedAuthorUid !== viewerUid;
     visible.push({
       ...row,
-      authorName: author?.fullName || row.authorName,
-      authorAvatar: author?.photos?.[0] || row.authorAvatar || null,
-      authorAge: age > 0 ? age : null,
-      authorArea: author?.area || null,
+      authorUid: mask ? null : resolvedAuthorUid,
+      authorName: mask ? 'Anonymous' : (author?.fullName || row.authorName),
+      authorAvatar: mask ? null : (author?.photos?.[0] || row.authorAvatar || null),
+      authorAge: mask ? null : (age > 0 ? age : null),
+      authorArea: mask ? null : (author?.area || null),
+      isAnonymous: anonymous,
     });
   });
   return visible;
@@ -176,13 +218,13 @@ const hydratePage = async (rows, viewerUid) => {
  * One page of the community feed for `viewerUid`.
  * Returns { posts, nextCursor } — pass nextCursor back for pagination.
  */
-export const getFeed = async (viewerUid, cursor = null) => {
+export const getFeed = async (viewerUid, cursor = null, category = null) => {
   await assertGoldMember(viewerUid);
   try {
     const posts = [];
     let pageCursor = cursor;
     for (let attempt = 0; attempt < 3 && posts.length < LIMITS.goldCirclePageSize; attempt += 1) {
-      const page = await fetchPage(pageCursor);
+      const page = await fetchPage(pageCursor, category);
       posts.push(...(await hydratePage(page.rows, viewerUid)));
       pageCursor = page.nextCursor;
       if (!pageCursor) break;
@@ -217,12 +259,16 @@ export const getComments = async (viewerUid, postId) => {
       .map((row) => {
         const author = byUid.get(row.authorUid);
         const age = author ? profileAge(author) : 0;
+        const anonymous = Boolean(row.isAnonymous);
+        const mask = anonymous && row.authorUid !== viewerUid;
         return {
           ...row,
-          authorName: author?.fullName || row.authorName,
-          authorAvatar: author?.photos?.[0] || row.authorAvatar || null,
-          authorAge: age > 0 ? age : null,
-          authorArea: author?.area || null,
+          authorUid: mask ? null : row.authorUid,
+          authorName: mask ? "Anonymous" : (author?.fullName || row.authorName),
+          authorAvatar: mask ? null : (author?.photos?.[0] || row.authorAvatar || null),
+          authorAge: mask ? null : (age > 0 ? age : null),
+          authorArea: mask ? null : (author?.area || null),
+          isAnonymous: anonymous,
         };
       });
   } catch (error) {
@@ -239,12 +285,11 @@ export const getComments = async (viewerUid, postId) => {
  * Publish a post (optionally with a photo uploaded through the backend
  * -> private Supabase pipeline) and returns the new post model.
  */
-export const createPost = async ({ uid, profile, text, category, image, whatsapp }) => {
+export const createPost = async ({ uid, profile, text, category, image, whatsapp, isAnonymous, location, budget }) => {
   await assertGoldMember(uid);
 
   const hasImage = Boolean(image?.uri);
   const trimmed = (text || '').trim();
-  // Text-only, photo-only and text + photo posts are all valid.
   if (!trimmed && !hasImage) {
     throw new Error('Write something or add a photo before you share.');
   }
@@ -264,16 +309,19 @@ export const createPost = async ({ uid, profile, text, category, image, whatsapp
 
   let uploaded = null;
   if (image?.uri) {
-    // Firebase Auth ID token -> backend -> private Supabase bucket.
     uploaded = await uploadProfilePhotoViaBackend(image.uri, image);
   }
 
+  const anonymous = Boolean(isAnonymous);
   const payload = {
-    authorUid: uid,
+    authorUid: anonymous ? null : uid,
     authorName: (profile?.fullName || 'Gold member').slice(0, 60),
     authorAvatar: typeof profile?.photos?.[0] === 'string' ? profile.photos[0] : '',
     text: clean,
     category: safeCategory,
+    isAnonymous: anonymous,
+    location: location || null,
+    budget: budget ? String(budget).slice(0, 40) : null,
     imageUrl: uploaded?.url || null,
     imagePath: uploaded?.path || null,
     sharedWhatsApp,
@@ -283,17 +331,24 @@ export const createPost = async ({ uid, profile, text, category, image, whatsapp
     commentCount: 0,
   };
 
+  const postRef = doc(collection(getDb(), POSTS));
   try {
-    const reference = await addDoc(collection(getDb(), POSTS), {
+    const batch = writeBatch(getDb());
+    batch.set(postRef, {
       ...payload,
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
     });
-    // Local echo for the feed (Firestore holds the server timestamps).
+    if (anonymous) {
+      batch.set(doc(getDb(), POST_AUTHORS, postRef.id), {
+        uid,
+        createdAt: serverTimestamp(),
+      });
+    }
+    await batch.commit();
     const now = new Date().toISOString();
-    return { id: reference.id, ...payload, createdAt: now, updatedAt: now };
+    return { id: postRef.id, ...payload, authorUid: uid, createdAt: now, updatedAt: now };
   } catch (error) {
-    // Never leave an orphaned photo behind when the write is rejected.
     if (uploaded?.path) deleteProfilePhoto(uploaded.path);
     throw new Error(friendlyError(error, 'Could not share your post. Please try again.'));
   }
@@ -318,8 +373,9 @@ export const toggleLike = async (uid, postId) => {
       const snapshot = await transaction.get(ref);
       if (!snapshot.exists()) throw new Error('This post is no longer available.');
       const data = snapshot.data() || {};
-      if (data.authorUid && data.authorUid !== uid) {
-        const blockSnap = await transaction.get(docRef('blocks', blockDocId(uid, data.authorUid)));
+      const authorUid = data.authorUid || null;
+      if (authorUid && authorUid !== uid) {
+        const blockSnap = await transaction.get(docRef('blocks', blockDocId(uid, authorUid)));
         if (blockSnap.exists()) throw new Error('You can no longer interact with this member.');
       }
       const likedBy = Array.isArray(data.likedBy) ? data.likedBy : [];
@@ -348,7 +404,8 @@ export const addComment = async ({ uid, profile, postId, text }) => {
   try {
     const postSnap = await getDoc(postRef);
     if (!postSnap.exists()) throw new Error('This post is no longer available.');
-    await assertNotBlocked(uid, postSnap.data()?.authorUid);
+    let postAuthorUid = postSnap.data()?.authorUid || null;
+    await assertNotBlocked(uid, postAuthorUid);
 
     const batch = writeBatch(getDb());
     batch.set(commentRef, {
@@ -437,6 +494,241 @@ export const voteDailyTopic = async ({ uid, dayKey, optionIndex }) => {
   }
 };
 
+/** Saved posts live in a per-user collection keyed by postId. */
+export const isPostSaved = async (uid, postId) => {
+  await assertGoldMember(uid);
+  try {
+    const snapshot = await getDoc(doc(getDb(), SAVES, `${uid}__${postId}`));
+    return snapshot.exists();
+  } catch (error) {
+    throw new Error(friendlyError(error, 'Could not check saved status.'));
+  }
+};
+
+export const toggleSave = async (uid, postId) => {
+  await assertGoldMember(uid);
+  const saveRef = doc(getDb(), SAVES, `${uid}__${postId}`);
+  try {
+    const snapshot = await getDoc(saveRef);
+    if (snapshot.exists()) {
+      await deleteDoc(saveRef);
+      return false;
+    }
+    await setDoc(saveRef, {
+      uid,
+      postId,
+      createdAt: serverTimestamp(),
+    });
+    return true;
+  } catch (error) {
+    throw new Error(friendlyError(error, 'Could not update saved post.'));
+  }
+};
+
+export const getSavedPostIds = async (uid) => {
+  await assertGoldMember(uid);
+  try {
+    const snapshot = await getDocs(
+      query(col(SAVES), where('uid', '==', uid), orderBy('createdAt', 'desc'), fsLimit(200)),
+    );
+    return docsToModels(snapshot).map((row) => row.postId).filter(Boolean);
+  } catch (error) {
+    throw new Error(friendlyError(error, 'Could not load saved posts.'));
+  }
+};
+
+export const getSavedPosts = async (viewerUid) => {
+  await assertGoldMember(viewerUid);
+  try {
+    const ids = await getSavedPostIds(viewerUid);
+    if (!ids.length) return [];
+    const snaps = await Promise.all(ids.map((id) => getDoc(docRef(POSTS, id))));
+    const rows = snaps.filter((s) => s.exists()).map((s) => docToModel(s));
+    // Reuse hydratePage for author masking / block filtering.
+    return await hydratePage(rows, viewerUid);
+  } catch (error) {
+    if (error?.code === 'gold-required') throw error;
+    throw new Error(friendlyError(error, 'Could not load saved posts.'));
+  }
+};
+
+/** Daily Love Challenge participation/completion. */
+export const getDailyChallengeCompletion = async (uid, dayKey) => {
+  await assertGoldMember(uid);
+  try {
+    const snapshot = await getDoc(doc(getDb(), CHALLENGES, `${uid}__${dayKey}`));
+    return snapshot.exists();
+  } catch (error) {
+    throw new Error(friendlyError(error, 'Could not load today\'s challenge.'));
+  }
+};
+
+export const completeDailyChallenge = async (uid, dayKey) => {
+  await assertGoldMember(uid);
+  const ref = doc(getDb(), CHALLENGES, `${uid}__${dayKey}`);
+  try {
+    const snapshot = await getDoc(ref);
+    if (snapshot.exists()) return true;
+    await setDoc(ref, {
+      uid,
+      dayKey,
+      completedAt: serverTimestamp(),
+    });
+    return true;
+  } catch (error) {
+    throw new Error(friendlyError(error, 'Could not complete today\'s challenge.'));
+  }
+};
+
+/** Green Flag vs Red Flag daily game. */
+export const getGameTally = async (dayKey) => {
+  try {
+    const snapshot = await getDoc(docRef(GAMES, dayKey));
+    const counts = snapshot.exists() ? snapshot.data().counts : null;
+    return Array.isArray(counts) ? counts : null;
+  } catch (error) {
+    throw new Error(friendlyError(error, 'Could not load today\'s game.'));
+  }
+};
+
+export const getMyGameVote = async (uid, dayKey) => {
+  await assertGoldMember(uid);
+  try {
+    const snapshot = await getDoc(doc(getDb(), GAMES, dayKey, 'votes', uid));
+    return snapshot.exists() ? snapshot.data().option : null;
+  } catch (error) {
+    throw new Error(friendlyError(error, 'Could not load your game vote.'));
+  }
+};
+
+export const voteGame = async ({ uid, dayKey, optionIndex }) => {
+  await assertGoldMember(uid);
+  if (optionIndex !== 0 && optionIndex !== 1) {
+    throw new Error('Choose green or red first.');
+  }
+  const tallyRef = docRef(GAMES, dayKey);
+  const voteRef = doc(getDb(), GAMES, dayKey, 'votes', uid);
+  try {
+    await runTransaction(getDb(), async (transaction) => {
+      const mine = await transaction.get(voteRef);
+      if (mine.exists()) throw new Error('You have already voted today.');
+      const tally = await transaction.get(tallyRef);
+      const data = tally.exists() ? tally.data() : {};
+      const counts = Array.isArray(data.counts) ? [...data.counts] : [0, 0];
+      while (counts.length < 2) counts.push(0);
+      counts[optionIndex] += 1;
+      transaction.set(voteRef, { option: optionIndex, createdAt: serverTimestamp() });
+      transaction.set(tallyRef, {
+        counts,
+        sum: (Number(data.sum) || 0) + 1,
+        updatedAt: serverTimestamp(),
+      });
+    });
+  } catch (error) {
+    throw new Error(friendlyError(error, 'Could not save your vote.'));
+  }
+};
+const SIDES = 'goldCircleSideChoices';
+const POLLS = 'goldCirclePollTallies';
+
+/** Choose a Side: aggregate tally (counts only). */
+export const getSideTally = async (dayKey) => {
+  try {
+    const snapshot = await getDoc(docRef(SIDES, dayKey));
+    const counts = snapshot.exists() ? snapshot.data().counts : null;
+    return Array.isArray(counts) ? counts : null;
+  } catch (error) {
+    throw new Error(friendlyError(error, 'Could not load this dilemma.'));
+  }
+};
+
+export const getMySideVote = async (uid, dayKey) => {
+  await assertGoldMember(uid);
+  try {
+    const snapshot = await getDoc(doc(getDb(), SIDES, dayKey, 'votes', uid));
+    return snapshot.exists() ? snapshot.data().option : null;
+  } catch (error) {
+    throw new Error(friendlyError(error, 'Could not load your choice.'));
+  }
+};
+
+export const voteSide = async ({ uid, dayKey, optionIndex }) => {
+  await assertGoldMember(uid);
+  if (optionIndex !== 0 && optionIndex !== 1) {
+    throw new Error('Choose one side first.');
+  }
+  const tallyRef = docRef(SIDES, dayKey);
+  const voteRef = doc(getDb(), SIDES, dayKey, 'votes', uid);
+  try {
+    await runTransaction(getDb(), async (transaction) => {
+      const mine = await transaction.get(voteRef);
+      if (mine.exists()) throw new Error('You have already chosen a side.');
+      const tally = await transaction.get(tallyRef);
+      const data = tally.exists() ? tally.data() : {};
+      const counts = Array.isArray(data.counts) ? [...data.counts] : [0, 0];
+      while (counts.length < 2) counts.push(0);
+      counts[optionIndex] += 1;
+      transaction.set(voteRef, { option: optionIndex, createdAt: serverTimestamp() });
+      transaction.set(tallyRef, {
+        counts,
+        sum: (Number(data.sum) || 0) + 1,
+        updatedAt: serverTimestamp(),
+      });
+    });
+  } catch (error) {
+    throw new Error(friendlyError(error, 'Could not save your choice.'));
+  }
+};
+
+/** Relationship Polls: aggregate tally (counts only). */
+export const getPollTally = async (pollKey) => {
+  try {
+    const snapshot = await getDoc(docRef(POLLS, pollKey));
+    const counts = snapshot.exists() ? snapshot.data().counts : null;
+    return Array.isArray(counts) ? counts : null;
+  } catch (error) {
+    throw new Error(friendlyError(error, 'Could not load this poll.'));
+  }
+};
+
+export const getMyPollVote = async (uid, pollKey) => {
+  await assertGoldMember(uid);
+  try {
+    const snapshot = await getDoc(doc(getDb(), POLLS, pollKey, 'votes', uid));
+    return snapshot.exists() ? snapshot.data().option : null;
+  } catch (error) {
+    throw new Error(friendlyError(error, 'Could not load your vote.'));
+  }
+};
+
+export const votePoll = async ({ uid, pollKey, optionIndex, optionCount }) => {
+  await assertGoldMember(uid);
+  if (!Number.isInteger(optionIndex) || optionIndex < 0 || optionIndex >= optionCount) {
+    throw new Error('Choose one of the options first.');
+  }
+  const tallyRef = docRef(POLLS, pollKey);
+  const voteRef = doc(getDb(), POLLS, pollKey, 'votes', uid);
+  try {
+    await runTransaction(getDb(), async (transaction) => {
+      const mine = await transaction.get(voteRef);
+      if (mine.exists()) throw new Error('You have already voted in this poll.');
+      const tally = await transaction.get(tallyRef);
+      const data = tally.exists() ? tally.data() : {};
+      const counts = Array.isArray(data.counts) ? [...data.counts] : [];
+      while (counts.length < optionCount) counts.push(0);
+      counts[optionIndex] += 1;
+      transaction.set(voteRef, { option: optionIndex, createdAt: serverTimestamp() });
+      transaction.set(tallyRef, {
+        counts,
+        sum: (Number(data.sum) || 0) + 1,
+        updatedAt: serverTimestamp(),
+      });
+    });
+  } catch (error) {
+    throw new Error(friendlyError(error, 'Could not save your vote.'));
+  }
+};
+
 /* ------------------------------------------------------------------ *
  * Moderation helpers (reporting/blocking reuse existing services)     *
  * ------------------------------------------------------------------ */
@@ -446,6 +738,8 @@ export const deletePost = async (uid, post) => {
   await assertGoldMember(uid);
   try {
     await deleteDoc(docRef(POSTS, post.id));
+    // Clean up the private author map for anonymous posts (best effort).
+    try { await deleteDoc(doc(getDb(), POST_AUTHORS, post.id)); } catch { /* ignore */ }
     if (post.imagePath) deleteProfilePhoto(post.imagePath);
   } catch (error) {
     throw new Error(friendlyError(error, 'Could not delete that post.'));
@@ -464,6 +758,21 @@ export default {
   addComment,
   deleteComment,
   deletePost,
+  isPostSaved,
+  toggleSave,
+  getSavedPostIds,
+  getSavedPosts,
+  getDailyChallengeCompletion,
+  completeDailyChallenge,
+  getGameTally,
+  getMyGameVote,
+  getSideTally,
+  getMySideVote,
+  voteSide,
+  getPollTally,
+  getMyPollVote,
+  votePoll,
+  voteGame,
   getDailyTally,
   getMyDailyVote,
   voteDailyTopic,

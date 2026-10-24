@@ -218,12 +218,14 @@ const seed = () =>
       authorUid: ALICE, authorName: 'Alice', authorAvatar: '',
       text: 'Hello Gold Circle!', category: 'discussion',
       imageUrl: null, imagePath: null, sharedWhatsApp: false, whatsapp: null,
+    location: null, budget: null,
       likedBy: [], likeCount: 0, commentCount: 1, createdAt: now, updatedAt: now,
     });
     await db.doc('goldCirclePosts/gpost2').set({
       authorUid: DAVE, authorName: 'Dave', authorAvatar: '',
       text: 'Second post', category: 'story',
       imageUrl: null, imagePath: null, sharedWhatsApp: false, whatsapp: null,
+    location: null, budget: null,
       likedBy: [], likeCount: 0, commentCount: 0, createdAt: now, updatedAt: now,
     });
     await db.doc('goldCirclePosts/gpost1/comments/gc1').set({
@@ -801,6 +803,9 @@ const validPost = (authorUid) => ({
   authorAvatar: '',
   text: 'A fresh post from the tests',
   category: 'discussion',
+  isAnonymous: false,
+  location: null,
+  budget: null,
   imageUrl: null,
   imagePath: null,
   sharedWhatsApp: false,
@@ -1021,6 +1026,120 @@ await allows('author deletes their own post', () =>
   goldDave.doc('goldCirclePosts/gpost2').delete(),
 );
 await allows('admin removes a post', () => goldAdmin.doc('goldCirclePosts/gpost1').delete());
+
+// --- anonymous post identity protection ----------------------------------
+console.log('ANON_AUTHOR_MAP_TESTS');
+
+await env.withSecurityRulesDisabled(async (ctx) => {
+  await ctx.firestore().doc('goldCirclePosts/ganon1').set({
+    authorUid: null, authorName: 'Anonymous', authorAvatar: '',
+    text: 'Anonymous confession', category: 'confession', isAnonymous: true,
+    imageUrl: null, imagePath: null, sharedWhatsApp: false, whatsapp: null,
+    location: null, budget: null,
+    likedBy: [], likeCount: 0, commentCount: 0, createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
+  });
+});
+
+await env.withSecurityRulesDisabled(async (ctx) => {
+  await ctx.firestore().doc('goldCirclePostAuthors/ganon1').set({ uid: ALICE, createdAt: serverTimestamp() });
+});
+await allows('anonymous post author can read their own author map', () =>
+  goldAlice.doc('goldCirclePostAuthors/ganon1').get(),
+);
+await denies('another Gold member cannot read the anonymous author map', () =>
+  goldDave.doc('goldCirclePostAuthors/ganon1').get(),
+);
+await allows('admin can read the anonymous author map', () =>
+  goldAdmin.doc('goldCirclePostAuthors/ganon1').get(),
+);
+await denies('free member cannot read the anonymous author map', () =>
+  goldCarol.doc('goldCirclePostAuthors/ganon1').get(),
+);
+await denies('unauthenticated cannot read the author map', () =>
+  asAnon().doc('goldCirclePostAuthors/ganon1').get(),
+);
+await denies('non-admin cannot list author maps', () =>
+  goldAlice.collection('goldCirclePostAuthors').get(),
+);
+await allows('admin can list author maps', () =>
+  goldAdmin.collection('goldCirclePostAuthors').get(),
+);
+
+await allows('author creates their author map in the same batch as an anonymous post', () => {
+  const batch = goldAlice.batch();
+  batch.set(goldAlice.doc('goldCirclePosts/ganon2'), {
+    authorUid: null, authorName: 'Anonymous', authorAvatar: '',
+    text: 'Another confession', category: 'confession', isAnonymous: true,
+    imageUrl: null, imagePath: null, sharedWhatsApp: false, whatsapp: null,
+    location: null, budget: null,
+    likedBy: [], likeCount: 0, commentCount: 0, createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
+  });
+  batch.set(goldAlice.doc('goldCirclePostAuthors/ganon2'), { uid: ALICE, createdAt: serverTimestamp() });
+  return batch.commit();
+});
+await denies('author map uid must match the authenticated user', async () => {
+  await env.withSecurityRulesDisabled(async (ctx) => {
+    await ctx.firestore().doc('goldCirclePosts/ganon3').set({
+      authorUid: null, authorName: 'Anonymous', authorAvatar: '',
+      text: 'x', category: 'confession', isAnonymous: true,
+      imageUrl: null, imagePath: null, sharedWhatsApp: false, whatsapp: null,
+    location: null, budget: null,
+      likedBy: [], likeCount: 0, commentCount: 0, createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
+    });
+  });
+  return goldAlice.doc('goldCirclePostAuthors/ganon3').set({ uid: DAVE, createdAt: serverTimestamp() });
+});
+await denies('author map cannot be created for a non-anonymous post', async () => {
+  await env.withSecurityRulesDisabled(async (ctx) => {
+    await ctx.firestore().doc('goldCirclePosts/ganon4').set({
+      authorUid: ALICE, authorName: 'Alice', authorAvatar: '',
+      text: 'Not anonymous', category: 'discussion',
+      imageUrl: null, imagePath: null, sharedWhatsApp: false, whatsapp: null,
+    location: null, budget: null,
+      likedBy: [], likeCount: 0, commentCount: 0, createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
+    });
+  });
+  return goldAlice.doc('goldCirclePostAuthors/ganon4').set({ uid: ALICE, createdAt: serverTimestamp() });
+});
+await denies('author map cannot be updated', () =>
+  goldAlice.doc('goldCirclePostAuthors/ganon1').update({ uid: DAVE }),
+);
+await allows('author deletes their own author map', () =>
+  goldAlice.doc('goldCirclePostAuthors/ganon1').delete(),
+);
+await denies('non-author cannot delete an author map', async () => {
+  await env.withSecurityRulesDisabled(async (ctx) => {
+    await ctx.firestore().doc('goldCirclePostAuthors/ganon5').set({ uid: ALICE, createdAt: serverTimestamp() });
+  });
+  return goldDave.doc('goldCirclePostAuthors/ganon5').delete();
+});
+
+await env.withSecurityRulesDisabled(async (ctx) => {
+  await ctx.firestore().doc('goldCirclePosts/ganon6').set({
+    authorUid: null, authorName: 'Anonymous', authorAvatar: '',
+    text: 'Deletable', category: 'confession', isAnonymous: true,
+    imageUrl: null, imagePath: null, sharedWhatsApp: false, whatsapp: null,
+    location: null, budget: null,
+    likedBy: [], likeCount: 0, commentCount: 0, createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
+  });
+  await ctx.firestore().doc('goldCirclePostAuthors/ganon6').set({ uid: ALICE, createdAt: serverTimestamp() });
+});
+await allows('anonymous post author can delete their own post', () =>
+  goldAlice.doc('goldCirclePosts/ganon6').delete(),
+);
+await denies('another member cannot delete an anonymous post', async () => {
+  await env.withSecurityRulesDisabled(async (ctx) => {
+    await ctx.firestore().doc('goldCirclePosts/ganon7').set({
+      authorUid: null, authorName: 'Anonymous', authorAvatar: '',
+      text: 'Not yours', category: 'confession', isAnonymous: true,
+      imageUrl: null, imagePath: null, sharedWhatsApp: false, whatsapp: null,
+    location: null, budget: null,
+      likedBy: [], likeCount: 0, commentCount: 0, createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
+    });
+    await ctx.firestore().doc('goldCirclePostAuthors/ganon7').set({ uid: ALICE, createdAt: serverTimestamp() });
+  });
+  return goldDave.doc('goldCirclePosts/ganon7').delete();
+});
 
 // --- one hot topic a day: private vote + Gold-only tally ------------------
 console.log('\n💛 gold circle daily topic (one hot topic a day)');

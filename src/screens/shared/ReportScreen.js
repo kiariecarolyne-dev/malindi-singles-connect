@@ -32,7 +32,10 @@ const ReportScreen = ({ navigation, route }) => {
   const [error, setError] = useState(null);
 
   const load = useCallback(async () => {
-    if (!targetUid) return;
+    if (!targetUid) {
+      setTarget(null);
+      return;
+    }
     try {
       setTarget(await profileService.getProfile(targetUid));
     } catch {
@@ -80,10 +83,12 @@ const ReportScreen = ({ navigation, route }) => {
           </View>
           <Text style={styles.doneTitle}>Thank you for reporting</Text>
           <Text style={styles.doneMsg}>
-            Our safety team reviews every report within 24 hours. You will not hear from this person
-            again if you block them.
+            Our safety team reviews every report within 24 hours.
+            {targetUid ? ' You will not hear from this person again if you block them.' : ''}
           </Text>
-          <Button title="Block them too" variant="danger" icon="ban" onPress={blockToo} style={styles.doneBtn} />
+          {targetUid ? (
+            <Button title="Block them too" variant="danger" icon="ban" onPress={blockToo} style={styles.doneBtn} />
+          ) : null}
           <Button title="Done" variant="secondary" onPress={() => navigation.goBack()} style={styles.doneBtn} />
         </View>
       </Screen>
@@ -97,7 +102,7 @@ const ReportScreen = ({ navigation, route }) => {
         <View style={styles.targetRow}>
           <Avatar uri={target?.photos?.[0]} name={target?.fullName} size={54} />
           <View style={styles.targetBody}>
-            <Text style={styles.targetName}>{target?.fullName || 'Loading…'}</Text>
+            <Text style={styles.targetName}>{targetUid ? (target?.fullName || 'Loading…') : 'Anonymous member'}</Text>
             {context ? <Text style={styles.targetCtx}>{context}</Text> : null}
           </View>
         </View>

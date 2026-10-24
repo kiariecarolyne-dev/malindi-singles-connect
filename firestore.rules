@@ -273,6 +273,7 @@ service cloud.firestore {
           ]);
 
         allow update: if signedIn() && uid() == userId && docId == 'data' &&
+          !deletionInProgress() &&
           request.resource.data.uid == userId &&
           request.resource.data.dateOfBirth is timestamp &&
           ageFromDob(request.resource.data.dateOfBirth) >= 18 &&
@@ -293,13 +294,15 @@ service cloud.firestore {
     match /likes/{likeId} {
       function involved() {
         return signedIn() &&
+          resource.data != null &&
           (resource.data.fromUid == uid() || resource.data.toUid == uid());
       }
 
       // `get` on a like that does not exist yet is part of the match transaction.
       allow get: if signedIn() &&
-        (resource == null || resource.data.fromUid == uid() || resource.data.toUid == uid());
-      allow list: if involved();
+        (resource == null || (resource.data != null && (resource.data.fromUid == uid() || resource.data.toUid == uid())));
+      allow list: if signedIn() && resource.data != null &&
+        (resource.data.fromUid == uid() || resource.data.toUid == uid());
 
       allow create: if signedIn() &&
         request.resource.data.fromUid == uid() &&
@@ -331,12 +334,14 @@ service cloud.firestore {
     match /passes/{passId} {
       function involved() {
         return signedIn() &&
+          resource.data != null &&
           (resource.data.fromUid == uid() || resource.data.toUid == uid());
       }
 
       allow get: if signedIn() &&
-        (resource == null || resource.data.fromUid == uid() || resource.data.toUid == uid());
-      allow list: if involved();
+        (resource == null || (resource.data != null && (resource.data.fromUid == uid() || resource.data.toUid == uid())));
+      allow list: if signedIn() && resource.data != null &&
+        (resource.data.fromUid == uid() || resource.data.toUid == uid());
 
       allow create: if signedIn() &&
         request.resource.data.fromUid == uid() &&
@@ -356,8 +361,7 @@ service cloud.firestore {
     match /matches/{matchId} {
       allow get: if signedIn() &&
         (resource == null || uid() in resource.data.uids || isAdmin());
-      allow list: if isAdmin() ||
-        (signedIn() && uid() in resource.data.uids);
+      allow list: if isAdmin() || (signedIn() && resource.data != null && uid() in resource.data.uids);
 
       // A match is only real when the other member already liked the caller;
       // the app creates it inside the mutual-like transaction (`likedMe`).
@@ -388,8 +392,7 @@ service cloud.firestore {
     match /conversations/{conversationId} {
       allow get: if signedIn() &&
         (resource == null || uid() in resource.data.members || isAdmin());
-      allow list: if isAdmin() ||
-        (signedIn() && uid() in resource.data.members);
+      allow list: if isAdmin() || (signedIn() && resource.data != null && uid() in resource.data.members);
 
       // A conversation is a real match's chat, never a cold-outreach channel:
       // the pair must have a committed match (or one created in this commit)
@@ -449,7 +452,10 @@ service cloud.firestore {
 
     match /meetups/{meetupId} {
       allow get: if signedIn() && (resource == null || uid() in [resource.data.fromUid, resource.data.toUid]);
-      allow list: if signedIn() && (resource.data.fromUid == uid() || resource.data.toUid == uid());
+      allow list: if signedIn() && resource.data != null && (
+        resource.data.fromUid == uid() ||
+        resource.data.toUid == uid()
+      );
       // An invite is only valid between two people who really matched (proven
       // by the committed match doc) and who have not blocked each other — it
       // is never a channel to cold-contact a stranger.
@@ -478,8 +484,7 @@ service cloud.firestore {
       allow get: if signedIn() &&
         (resource == null || resource.data.uid == uid());
 
-      allow list: if signedIn() &&
-        (resource.data.uid == uid() || resource.data.blockedUid == uid());
+      allow list: if signedIn() && resource.data != null && (resource.data.uid == uid() || resource.data.blockedUid == uid());
 
       allow create: if signedIn() &&
         request.resource.data.uid == uid() &&
@@ -505,7 +510,8 @@ service cloud.firestore {
     }
 
     match /notifications/{notificationId} {
-      allow get, list: if signedIn() && resource.data.uid == uid();
+      allow get: if signedIn() && resource.data.uid == uid();
+      allow list: if signedIn() && resource.data != null && resource.data.uid == uid();
 
       allow create: if signedIn() &&
         request.resource.data.uid is string &&
